@@ -1,0 +1,30 @@
+name: interview_engine
+description: "Offline mock-interview engine: question plans, verified-quote scoring and on-device voice. No database and no brahma_core; the AI comes in through InterviewBrain."
+version: 0.0.1
+publish_to: 'none'
+repository: https://github.com/sudharamachandranrajeev/pariksha-interview-kit
+
+environment:
+  sdk: ^3.13.5
+  flutter: '>=3.47.0'
+
+# Native libraries the engine will use (versions as in Udyoga, the app it is
+# extracted from). J0 is a skeleton: only native_probe.dart touches them.
+# Never add MediaPipe or ML Kit here (test/privacy_test.dart checks).
+dependencies:
+  flutter:
+    sdk: flutter
+  archive: ^4.0.0
+  audioplayers: ^6.8.1
+  camera: ^0.12.2
+  camera_desktop: ^2.0.0
+  crypto: ^3.0.7
+  flutter_litert: ^4.2.0
+  http: ^1.6.0
+  record: ^7.2.0
+  sherpa_onnx: ^2.0.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0

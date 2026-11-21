@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  FLUTTER_VERSION: 3.47.7
+
+jobs:
+  packages:
+    name: Analyze and test (${{ matrix.package }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [packages/interview_engine, packages/ui_kit, example]
+    defaults:
+      run:
+        working-directory: ${{ matrix.package }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+      - run: flutter pub get
+      - name: Formatting
+        run: dart format -l 110 --output=none --set-exit-if-changed lib test
+      - run: flutter analyze
+      - run: flutter test
+
+  linux-example:
+    name: Linux example build (native libraries link)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Build tools
+        # Udyoga's list, plus GStreamer for camera_desktop and audioplayers.
+        # (Udyoga's libsecret and webkit are not needed: the kit has neither.)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-plugins-good xvfb >/dev/null
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+      - name: Build
+        working-directory: example
+        run: flutter build linux --release
+      - name: Native libraries are bundled and resolve
+        working-directory: example/build/linux/x64/release/bundle
+        run: |
+          for lib in libsherpa-onnx-c-api.so libonnxruntime.so libcamera_desktop_plugin.so libtensorflowlite_c-linux.so; do
+            test -f "lib/$lib" || { echo "missing lib/$lib"; exit 1; }
+          done
+          ! ldd pariksha_example lib/*.so 2>/dev/null | grep "not found"
+      - name: Probe (loads each library and exits)
+        # A runner has no camera and only software GL, so this is advisory.
+        continue-on-error: true
+        working-directory: example/build/linux/x64/release/bundle
+        run: timeout 120 xvfb-run -a ./pariksha_example --probe

@@ -1,0 +1,56 @@
+# Miscellaneous
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.build/
+.buildlog/
+.history
+.svn/
+.swiftpm/
+migrate_working_dir/
+
+# IntelliJ related
+*.iml
+*.ipr
+*.iws
+.idea/
+.vscode/
+
+# Flutter/Dart/Pub related
+**/doc/api/
+**/ios/Flutter/.last_build_id
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+build/
+coverage/
+.widget_preview/
+
+# Libraries do not commit a lock file; the example app does.
+/packages/*/pubspec.lock
+
+# Local checkouts for development (see README). Never commit these.
+pubspec_overrides.yaml
+
+# Symbolication and obfuscation
+app.*.symbols
+app.*.map.json
+
+# Secrets: never commit signing keys or env files
+*.jks
+*.keystore
+key.properties
+.env
+.env.*
+
+# Interview recordings and downloaded models never belong in the repo
+*.wav
+*.onnx
+*.tflite
+recordings/
+models/

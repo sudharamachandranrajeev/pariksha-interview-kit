@@ -1,0 +1,23 @@
+name: pariksha_example
+description: "Build check for the Pariksha interview kit: links both packages and their native libraries on Linux."
+publish_to: 'none'
+version: 0.0.1+1
+
+environment:
+  sdk: ^3.13.5
+
+dependencies:
+  flutter:
+    sdk: flutter
+  interview_engine:
+    path: ../packages/interview_engine
+  ui_kit:
+    path: ../packages/ui_kit
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
