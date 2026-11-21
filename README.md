@@ -27,9 +27,9 @@ This repo holds two Flutter packages that Udyoga (job search) and Vidya (study c
 Fix the interviewer once and both apps get the fix. Scores mean the same thing in both apps.
 
 > [!NOTE]
-> **Status: skeleton (step J0).** The packages build, link their native libraries and pass their
-> tests, but the real interviewer and components still live in Udyoga. They move here in the next
-> steps.
+> **Status: early (step J1).** `ui_kit` holds the shared motion and components, and Udyoga and
+> Vidya use it. The interview engine is still a skeleton: the real interviewer still lives in
+> Udyoga and moves here in the next steps.
 
 ## What's inside
 
@@ -82,11 +82,20 @@ dependency_overrides:
 Add `pubspec_overrides.yaml` to the app's `.gitignore`. Never commit it: other people's builds
 would look for your folders.
 
-**Step 3. Install a palette.** Add a `KitPalette` to the app's theme:
+**Step 3. Install a palette.** Add a `KitPalette` to the app's theme, use the page rise, and
+wrap the app in the shadcn bridge the kit's cards need:
 
 ```dart
-ThemeData(extensions: const [KitPalette(primary: Color(0xFF2E6AFE), /* ... */)]);
+MaterialApp(
+  theme: ThemeData(
+    extensions: const [KitPalette(primary: Color(0xFF2E6AFE), /* ... */)],
+    pageTransitionsTheme: PageTransitionsTheme(builders: RisePageTransitionsBuilder.everywhere()),
+  ),
+  builder: (context, child) => KitShadBridge(child: child!),
+);
 ```
+
+See [`packages/ui_kit`](packages/ui_kit) for the list of components.
 
 **Step 4. Plug in the AI.** Write a small class that `implements InterviewBrain` and calls the
 app's own AI (Udyoga's `Ai`, or Vidya's `HelpAsker` with local Ollama).

@@ -47,13 +47,37 @@ class KitPalette extends ThemeExtension<KitPalette> {
   final Color muted;
   final Color primary;
 
-  /// The palette installed on the nearest theme. Throws a clear error when
-  /// the app forgot to add one, rather than painting in a wrong colour.
+  /// The palette installed on the nearest theme. When the app installed
+  /// none, a palette made from the theme's [ColorScheme], so the widgets
+  /// still paint in the app's colours.
   static KitPalette of(BuildContext context) {
-    final p = Theme.of(context).extension<KitPalette>();
-    assert(p != null, 'No KitPalette on the theme: add one to ThemeData.extensions.');
-    return p!;
+    final theme = Theme.of(context);
+    return theme.extension<KitPalette>() ?? KitPalette.fromScheme(theme.colorScheme);
   }
+
+  /// A palette made from a Material [ColorScheme]: the fallback for apps
+  /// that install no [KitPalette].
+  factory KitPalette.fromScheme(ColorScheme s) {
+    final dark = s.brightness == Brightness.dark;
+    return KitPalette(
+      top: Color.alphaBlend(s.primary.withAlpha(dark ? 0x14 : 0x1F), s.surface),
+      bottom: s.surface,
+      glow: s.primary.withAlpha(dark ? 0x4D : 0x59),
+      glow2: s.tertiary.withAlpha(dark ? 0x2B : 0x2E),
+      surface: s.surface,
+      card: s.surfaceContainerLow,
+      subtle: s.surfaceContainer,
+      raised: s.surfaceContainerHighest,
+      hairline: s.outlineVariant,
+      text: s.onSurface,
+      heading: s.onSurface,
+      muted: s.onSurfaceVariant,
+      primary: s.primary,
+    );
+  }
+
+  /// [glow2] at full strength: the second accent, for beams and charts.
+  Color get accent => glow2.withAlpha(0xFF);
 
   @override
   KitPalette copyWith({
