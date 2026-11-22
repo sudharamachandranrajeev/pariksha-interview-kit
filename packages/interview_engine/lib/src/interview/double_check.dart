@@ -137,7 +137,11 @@ DisputeResult recheckScore(
 }) {
   final transcript = round.heard[score.question] ?? '';
   final asked = round.asked[score.question] ?? const [];
-  final none = VerifiedScore(question: score.question, criterionId: score.criterionId, level: scale.noEvidence);
+  final none = VerifiedScore(
+    question: score.question,
+    criterionId: score.criterionId,
+    level: scale.noEvidence,
+  );
   if (score.level == scale.noEvidence) {
     return DisputeResult(
       score: score,

@@ -334,7 +334,9 @@ class ModelManager {
       }
       for (final d in m.drop) {
         final e = FileSystemEntity.typeSync('${staging.path}/$d');
-        if (e == FileSystemEntityType.directory) await Directory('${staging.path}/$d').delete(recursive: true);
+        if (e == FileSystemEntityType.directory) {
+          await Directory('${staging.path}/$d').delete(recursive: true);
+        }
         if (e == FileSystemEntityType.file) await File('${staging.path}/$d').delete();
       }
       if (!await File('${staging.path}/${m.entry}').exists()) {

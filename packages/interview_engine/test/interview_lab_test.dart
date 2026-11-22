@@ -194,7 +194,9 @@ void main() {
       expect(await mm.sizeOnDisk(m), 5000 + 64);
       // Besides the model, only the lock folder (one empty lock file per model).
       expect(visible(root), ['example-model']);
-      expect(Directory('${root.path}/.locks').listSync().map((e) => e.path.split('/').last), ['example-model.lock']);
+      expect(Directory('${root.path}/.locks').listSync().map((e) => e.path.split('/').last), [
+        'example-model.lock',
+      ]);
 
       await mm.delete(m);
       expect(await mm.installed(m), isFalse);

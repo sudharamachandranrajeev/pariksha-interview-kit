@@ -32,13 +32,15 @@ const answer =
     'two shifts, and every shift was covered by Monday morning. I emailed the ward manager a list of what I '
     'changed and logged each change in the rota system.';
 
-DebriefRound roundOf(String said) => DebriefRound.of(questions: const [question], answers: {0: said}, profile: profile);
+DebriefRound roundOf(String said) =>
+    DebriefRound.of(questions: const [question], answers: {0: said}, profile: profile);
 
 final scale = Framework.of('nhs_values').scale;
 
 /// The criterion ids in the order a scoring request lists them.
-List<String> orderIn(BrainRequest r) =>
-    [for (final m in RegExp(r'<criterion id="([^"]+)"').allMatches(r.texts.first)) m[1]!];
+List<String> orderIn(BrainRequest r) => [
+  for (final m in RegExp(r'<criterion id="([^"]+)"').allMatches(r.texts.first)) m[1]!,
+];
 
 /// What the request says the candidate said.
 String saidIn(BrainRequest r) => RegExp(r'<said>\n([\s\S]*?)\n</said>').firstMatch(r.texts[1])![1]!;
@@ -94,42 +96,55 @@ void main() {
       expect({for (final s in v.scores) s.criterionId: s.level.code}, {'c1': '3', 'c2': '2', 'c3': '2'});
     });
 
-    test('a judge swayed by position disagrees with itself: the lower level shows, marked uncertain', () async {
-      // Whatever criterion comes first gets a 4; the rest get a 2.
-      final brain = ScriptedBrain((r) {
-        final order = orderIn(r);
-        final quotes = {'c1': quote1, 'c2': quote2, 'c3': quote3};
-        return reply([
-          for (final (i, id) in order.indexed) {'criterion': id, 'level': i == 0 ? '4' : '2', 'quote': quotes[id]!},
-        ]);
-      });
-      final round = roundOf(answer);
-      final runs = await scoreTwice(
-        brain: brain,
-        role: 'Ward clerk',
-        framework: profile.framework,
-        round: round,
-        random: math.Random(3),
-      );
-      final v = verifyRuns(runs, scale, round);
-      final uncertain = [for (final s in v.scores) if (s.uncertain) s];
-      expect(uncertain, hasLength(2), reason: 'each run put a different criterion first');
-      for (final s in uncertain) {
-        expect(s.level.code, '2', reason: 'the lower of 4 and 2');
-      }
-      final d = Debrief.build(framework: profile.framework, round: round, verified: v);
-      final flagged = [for (final c in d.coverage) if (c.uncertain) c];
-      expect(flagged, hasLength(2));
-      expect(flagged.first.note, startsWith(uncertainNote));
-      expect(uncertainNote, contains('Uncertain, check yourself'));
-      expect(d.scoreLines().map((l) => l.level.code), everyElement('2'));
-    });
+    test(
+      'a judge swayed by position disagrees with itself: the lower level shows, marked uncertain',
+      () async {
+        // Whatever criterion comes first gets a 4; the rest get a 2.
+        final brain = ScriptedBrain((r) {
+          final order = orderIn(r);
+          final quotes = {'c1': quote1, 'c2': quote2, 'c3': quote3};
+          return reply([
+            for (final (i, id) in order.indexed)
+              {'criterion': id, 'level': i == 0 ? '4' : '2', 'quote': quotes[id]!},
+          ]);
+        });
+        final round = roundOf(answer);
+        final runs = await scoreTwice(
+          brain: brain,
+          role: 'Ward clerk',
+          framework: profile.framework,
+          round: round,
+          random: math.Random(3),
+        );
+        final v = verifyRuns(runs, scale, round);
+        final uncertain = [
+          for (final s in v.scores)
+            if (s.uncertain) s,
+        ];
+        expect(uncertain, hasLength(2), reason: 'each run put a different criterion first');
+        for (final s in uncertain) {
+          expect(s.level.code, '2', reason: 'the lower of 4 and 2');
+        }
+        final d = Debrief.build(framework: profile.framework, round: round, verified: v);
+        final flagged = [
+          for (final c in d.coverage)
+            if (c.uncertain) c,
+        ];
+        expect(flagged, hasLength(2));
+        expect(flagged.first.note, startsWith(uncertainNote));
+        expect(uncertainNote, contains('Uncertain, check yourself'));
+        expect(d.scoreLines().map((l) => l.level.code), everyElement('2'));
+      },
+    );
 
     test('a level only one run gave reads as uncertain no evidence; a single run is never marked', () {
       final round = roundOf(answer);
       final runs = [
         [
-          AnswerScore(question: 0, scores: const [CriterionScore(criterionId: 'c1', code: '3', quote: quote1)]),
+          AnswerScore(
+            question: 0,
+            scores: const [CriterionScore(criterionId: 'c1', code: '3', quote: quote1)],
+          ),
         ],
         [
           AnswerScore(
@@ -222,9 +237,8 @@ void main() {
         [for (final r in plainAsked) jsonEncode(r.texts)],
         reason: 'the praise never reaches the scorer',
       );
-      String fingerprint(Verified v) => [
-        for (final s in v.scores) '${s.criterionId}:${s.level.code}:${s.quote}:${s.uncertain}',
-      ].join('|');
+      String fingerprint(Verified v) =>
+          [for (final s in v.scores) '${s.criterionId}:${s.level.code}:${s.quote}:${s.uncertain}'].join('|');
       expect(fingerprint(flattered), fingerprint(plain));
       expect(fingerprint(plain), 'c1:3:$quote1:false|c2:2:$quote2:false|c3:N/O::false');
     });

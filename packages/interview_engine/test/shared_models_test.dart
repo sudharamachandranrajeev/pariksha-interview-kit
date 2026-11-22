@@ -44,10 +44,7 @@ void main() {
       final udyoga = ModelManager(root, client: slowServer(body, asked: asked));
       final vidya = ModelManager(root, client: slowServer(body, asked: asked));
       final progress = <int>[];
-      await Future.wait([
-        udyoga.download(m),
-        vidya.download(m, onProgress: (got, _) => progress.add(got)),
-      ]);
+      await Future.wait([udyoga.download(m), vidya.download(m, onProgress: (got, _) => progress.add(got))]);
       expect(asked, hasLength(1), reason: 'the second app waits, then finds the model installed');
       expect(progress.last, body.length);
       expect(await udyoga.installed(m), isTrue);
