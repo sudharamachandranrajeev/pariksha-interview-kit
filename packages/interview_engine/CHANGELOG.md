@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.0 (unreleased)
+
+J6: the answer checker. The twelve honesty rules, audited and enforced; see the README table.
+
+- A strength must quote the line that earned it (`AnswerScore.strengthQuote`, `quotedStrength`,
+  `ContentNote.quote`); one fix in one sentence (`oneFix`).
+- Each process template scores on its real scale (`InterviewProcess.framework`); score lines carry
+  the next level's anchor.
+- `rankQuestions`: likely questions in four evidence tiers, each with why; organisation questions
+  cite a verified or user-confirmed `EvidenceCard`.
+- `answerExpectations`: panel, organisation and manager expectations, covered or not covered; "No
+  sources yet" when there are no cards.
+- `improveAnswer` and `checkRewrite`: no rewrite before the candidate's attempt, none that adds a
+  number, name or achievement. `wordPredictedQuestions` for AI wording under the same check.
+- `TextPromptedInterviewBrain` and `replyJson` for text-only models, so local and cloud models get
+  the same prompt and checks.
+- Flattering self-descriptions are taken out before scoring, like other self-verdicts.
+
 ## 0.2.0 (unreleased)
 
 J3: what Vidya's spoken interviewer needs, shared so both apps get it.

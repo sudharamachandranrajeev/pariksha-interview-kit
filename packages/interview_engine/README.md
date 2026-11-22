@@ -20,6 +20,14 @@ The offline mock-interview engine shared by Udyoga and Vidya. See the [repo READ
   LiteRT) run on the device. Models are downloaded only on request and checked against pinned
   SHA-256 hashes.
 - `probeNative()` checks that sherpa_onnx, LiteRT and the camera plugin load.
+- `rankQuestions` predicts likely questions from the criteria and the app's checked fact cards
+  (`EvidenceCard`), in tiers: (a) the person specification, (b) the organisation's own sources,
+  (c) reported by past candidates, (d) common questions. Each says why and which tier it is from; one
+  that names the organisation cites a verified or user-confirmed card.
+- `answerExpectations` splits what one answer was expected to show into the panel, the
+  organisation and the manager, each covered (with the line that covered it) or "not covered".
+- `improveAnswer` refuses to rewrite before the candidate's own attempt, and refuses a rewrite that
+  adds a number, name or achievement not in their words or story bank (`checkRewrite`).
 
 ## Where the models live
 
@@ -55,3 +63,30 @@ computer: one copy in one folder. Deleting one here deletes it for Udyoga too."
 `MemoryTakes`, `ListSink`, `FakeCoach`, `FakeCamera`, `FakeSpokenEngines`, `ScriptedBrain`,
 `spokenAnswer`, `frameMeasure`), so a widget test can run a spoken round and score it with no
 microphone, camera, model or AI.
+
+## The honesty rules: where each is enforced
+
+The answer checker (journey plan step J6) applies twelve rules in this engine, so Udyoga and Vidya
+check answers the same way. Every rule has a test named after it in
+`test/honesty_rules_test.dart`. "Before J6" means the rule was already enforced; "J6" means the gap
+was found in the audit and closed then.
+
+| Rule | Where it is enforced | Test | When |
+| --- | --- | --- | --- |
+| 1. Criteria fixed and shown before the answer | `EngineQuestion` why and look-for, `RoundQuestion.tests`; `verifyScores` drops a score for a criterion not asked | `rule01_criteria_fixed` | Before J6 |
+| 2. Every score quotes the transcript, else N/O | `verifyScores`, `quoteInTranscript` | `rule02_quote_checked` | Before J6 |
+| 3. Cards carry claim, source, date, quote, status | `EvidenceCard`; only `usable` (verified or user-confirmed) cards feed questions and expectations, each with `cite` | `rule03_cards_are_sourced` | J6 (Vidya's dossier checked quotes before J6) |
+| 4. Stale cards flagged | `EvidenceCard.stale`, shown in every `cite` and question reason | `rule04_stale_flagged` | J6 |
+| 5. Inference labelled | `onlyInferenceNote`; inference cards never feed a question | `rule05_inference_labelled` | J6 |
+| 6. Pushback alone never changes a score | `recheckScore` re-checks the quote and criterion only; `withoutSelfVerdicts` | `rule06_pushback_alone` | Before J6 in Vidya; J6 in Udyoga |
+| 7. No model answer before the user's attempt; rewrites never invent | `improveAnswer`, `hasOwnAttempt`, `checkRewrite`, `inventedTokens`; `wordPredictedQuestions` keeps the original wording when a rewording invents | `rule07_no_model_answer_first` | J6 |
+| 8. No percentages; scored twice; "uncertain" when runs disagree | `scoreTwice`, `verifyRuns` | `rule08_scored_twice` | Before J6 in Vidya; J6 in Udyoga |
+| 9. One strength quoting its line, and one fix | `AnswerScore.strengthQuote` checked by `verifyScores`; `quotedStrength` on the device; `oneFix`; `ContentNote.quote` | `rule09_one_strength_one_fix` | J6 |
+| 10. "Not found in your sources" | `noSourcesNote`, `notInSourcesNote`, `organisationTierNote`; empty expectation groups say so | `rule10_not_found` | J6 (Vidya's dossier search before J6) |
+| 11. The panel's real scale, with this level's and the next level's anchor | `InterviewProcess.framework` per template (`frameworkForProcess`); `Debrief.scoreLines` gives `next` | `rule11_real_scales` | J6 (scales before J6) |
+| 12. Same rules on local and cloud models | One prompt and schema for every brain (`PromptedInterviewBrain`, `TextPromptedInterviewBrain`, `replyJson`); every reply goes through the same checks | `rule12_same_rules_everywhere` | J6 |
+
+The same file has sycophancy probes (praise appended to an answer, "I think that deserves a 4",
+flattering self-description), the rewrite-invention check, and question ranking with and without
+cards.
+

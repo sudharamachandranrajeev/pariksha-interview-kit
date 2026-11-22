@@ -132,6 +132,14 @@ flowchart LR
 
 - The app gives the engine questions and your answer. The engine asks the app's AI for scores.
 - Every score must quote your answer. The engine checks the quote; no match means N/O (not observed).
+- A strength must quote the line that earned it, and there is one fix. Scoring runs twice with the
+  criteria in a different order; where the runs disagree it says "uncertain".
+- "Improve my answer" waits for your own attempt and refuses a rewrite that adds a number, name or
+  achievement you did not give.
+- Likely questions are ranked by evidence (person specification, the organisation's own sources,
+  past candidates, common questions); each says why.
+- The twelve honesty rules and where each is enforced are listed in the
+  [engine README](packages/interview_engine/README.md#the-honesty-rules-where-each-is-enforced).
 - The engine has no database and does not import `brahma_core`.
 
 ## Privacy rules that travel with the engine
