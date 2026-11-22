@@ -9,6 +9,11 @@ opts in to a video take for that session".
   stream + transcript times per take, in a folder the app keeps private; `purge(keepDays)` (default
   14, 1 to 90), `deleteAll`, `bytesUsed`, `remove`, `removeRound`.
 - `VideoRetention`: purge at start and daily.
+- `VideoTakeStore.save` is atomic: across disks the clip is copied to a hidden `.part` file in the
+  round's folder and renamed into place, the sidecar is renamed last, and a failed save deletes the
+  temporary clip and everything it wrote. `sweep()` (run by `VideoRetention.start`, with the
+  recorder's temporary folders) removes `.part` files, clips without a sidecar and stale camera
+  plugin files left by a crash.
 - `RoundVideo` and `SpokenRound(video:)`: records each answer and follow-up while the microphone
   listens; kept, redone and dropped answers keep, replace or delete the clip. Off unless passed.
 - `FaceCamera.startRecording`/`stopRecording` and `cuesPaused`; `RecordingFeed` from

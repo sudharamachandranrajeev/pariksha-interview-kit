@@ -120,6 +120,107 @@ void main() {
     });
   });
 
+  group('the temporary clip', () {
+    List<String> names(Directory d) => d.existsSync()
+        ? [for (final e in d.listSync(recursive: true)) e.path.substring(d.path.length + 1)]
+        : const [];
+
+    test('across disks it is copied to a hidden .part file, renamed into place, then deleted', () async {
+      final renames = <(String, String)>[];
+      final st = VideoTakeStore(
+        root,
+        clock: () => now,
+        rename: (from, to) async {
+          if (from.path.contains('/camera/')) throw const FileSystemException('cross-device link');
+          renames.add((from.uri.pathSegments.last, to.split('/').last));
+          await from.rename(to);
+        },
+      );
+      final cam = await tempVideo(Directory('${tmp.path}/camera'), 'camera_desktop_0_3.mp4');
+      final t = await st.save(
+        roundId: 'r',
+        question: 0,
+        take: 1,
+        recorded: cam,
+        audio: Pcm(Float32List(1600)),
+        segments: segments,
+      );
+      expect(File(cam).existsSync(), isFalse, reason: 'the temporary clip is gone');
+      expect(renames.map((r) => r.$1), everyElement(allOf(startsWith('.'), endsWith('.part'))));
+      expect(renames.map((r) => r.$2), [
+        '${t.id}.mp4',
+        '${t.id}.wav',
+        '${t.id}.json',
+      ], reason: 'sidecar last');
+      expect(names(root).where((n) => n.endsWith('.part')), isEmpty);
+      expect((await st.list()).single.id, t.id);
+    });
+
+    test('a failed save deletes the temporary clip and everything it wrote', () async {
+      final st = VideoTakeStore(
+        root,
+        clock: () => now,
+        rename: (from, to) async {
+          if (to.endsWith('.json')) throw const FileSystemException('disk full');
+          await from.rename(to);
+        },
+      );
+      final cam = await tempVideo(Directory('${tmp.path}/camera'));
+      await expectLater(
+        st.save(
+          roundId: 'r',
+          question: 0,
+          take: 1,
+          recorded: cam,
+          audio: Pcm(Float32List(1600)),
+          segments: segments,
+        ),
+        throwsA(isA<FileSystemException>()),
+      );
+      expect(File(cam).existsSync(), isFalse);
+      expect(names(root), isEmpty, reason: 'no clip, audio, sidecar or .part left behind');
+      expect(await st.list(), isEmpty);
+    });
+
+    test(
+      'after a crash the next start sweeps .part files, clips without a sidecar and stale camera files',
+      () async {
+        final st = store();
+        final cam = await tempVideo(Directory('${tmp.path}/camera'));
+        final kept = await st.save(roundId: 'r', question: 0, take: 1, recorded: cam, segments: segments);
+        // What a crash mid-save leaves: a half copy and a clip whose sidecar never came.
+        final dir = Directory('${root.path}/r');
+        File('${dir.path}/.q2-t1-p0-1.mp4.part').writeAsBytesSync([1, 2]);
+        File('${dir.path}/q3-t1-p0-2.mp4').writeAsBytesSync([1, 2]);
+        File('${dir.path}/q3-t1-p0-2.wav').writeAsBytesSync([1, 2]);
+        Directory('${root.path}/crashed').createSync();
+        File('${root.path}/crashed/.q1-t1-p0-3.json.part').writeAsStringSync('{');
+        // The recorder's temporary folder: an old clip, one still being written, and someone else's file.
+        final camTmp = Directory('${tmp.path}/systmp')..createSync();
+        final old = File('${camTmp.path}/camera_desktop_0_7.mp4')..writeAsBytesSync([1]);
+        old.setLastModifiedSync(now.subtract(const Duration(hours: 1)));
+        final android = File('${camTmp.path}/REC2049581.mp4')..writeAsBytesSync([1]);
+        android.setLastModifiedSync(now.subtract(const Duration(days: 2)));
+        final live = File('${camTmp.path}/camera_desktop_1_8.mkv')..writeAsBytesSync([1]);
+        live.setLastModifiedSync(now.subtract(const Duration(minutes: 1)));
+        final other = File('${camTmp.path}/holiday.mp4')..writeAsBytesSync([1]);
+        other.setLastModifiedSync(now.subtract(const Duration(days: 30)));
+
+        final retention = VideoRetention(st, () => 14, recorderTemps: [camTmp]);
+        await retention.start();
+        retention.stop();
+
+        expect(names(dir)..sort(), ['${kept.id}.json', '${kept.id}.mp4']);
+        expect(Directory('${root.path}/crashed').existsSync(), isFalse);
+        expect(old.existsSync(), isFalse);
+        expect(android.existsSync(), isFalse);
+        expect(live.existsSync(), isTrue, reason: 'a recording in progress is left alone');
+        expect(other.existsSync(), isTrue, reason: 'only the camera plugins\' file names are touched');
+        expect((await st.list()).single.id, kept.id);
+      },
+    );
+  });
+
   group('retention', () {
     test('takes older than 14 days go by default; newer ones stay', () async {
       final st = store();

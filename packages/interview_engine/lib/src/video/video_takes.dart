@@ -152,10 +152,28 @@ String _name(String path) => path.split(RegExp(r'[/\\]')).last;
 /// Video takes as files under [root], one folder per round. [root] must be
 /// in the app's own private storage, excluded from sync and backup.
 class VideoTakeStore {
-  VideoTakeStore(this.root, {DateTime Function()? clock}) : _clock = clock ?? DateTime.now;
+  VideoTakeStore(this.root, {DateTime Function()? clock, @visibleForTesting this.rename = _rename})
+    : _clock = clock ?? DateTime.now;
 
   final Directory root;
   final DateTime Function() _clock;
+
+  /// Renames [from] to [to]; throws [FileSystemException] across disks.
+  /// Tests swap it to force the copy path or a failure.
+  final Future<void> Function(File from, String to) rename;
+
+  static Future<void> _rename(File from, String to) => from.rename(to);
+
+  /// Ids being saved now: [sweep] leaves their files alone.
+  final _saving = <String>{};
+
+  /// File names the camera plugins give a recording in their temporary
+  /// folder: camera_desktop on Linux (`camera_desktop_<cam>_<n>.mp4|mkv`)
+  /// and Windows (`camera_desktop_video_<ms>.mp4`), CameraX on Android
+  /// (`REC<digits>.mp4` in the app's cache).
+  static final recorderTempName = RegExp(
+    r'^(camera_desktop_\d+_\d+\.(mp4|mkv|webm)|camera_desktop_video_\d+\.mp4|REC\d+\.mp4)$',
+  );
 
   /// Days a video take is kept unless the user picks another number.
   static const defaultKeepDays = 14;
@@ -170,6 +188,13 @@ class VideoTakeStore {
   /// Moves [recorded] (the recorder's temporary file) into the store with a
   /// copy of [audio] and the [segments]' timestamps. The temporary file is
   /// gone afterwards whatever happens.
+  ///
+  /// Every file appears under its final name in one rename: across disks the
+  /// clip is copied to a hidden `.part` file in the round's folder first. The
+  /// sidecar is renamed last, so a take is listed only once it is whole. A
+  /// failure removes everything this save wrote; a crash leaves only `.part`
+  /// files or a clip without a sidecar, which [sweep] removes on the next
+  /// start.
   Future<VideoTake> save({
     required String roundId,
     required int question,
@@ -181,18 +206,19 @@ class VideoTakeStore {
     Duration audioLead = Duration.zero,
   }) async {
     final src = File(recorded);
+    final dir = _roundDir(roundId);
+    final now = _clock().toUtc();
+    final id = 'q${question + 1}-t$take-p$part-${now.microsecondsSinceEpoch}';
+    _saving.add(id);
     try {
-      final dir = _roundDir(roundId);
       await dir.create(recursive: true);
-      final now = _clock().toUtc();
       final ext = _name(recorded).contains('.') ? _name(recorded).split('.').last.toLowerCase() : 'mp4';
-      final id = 'q${question + 1}-t$take-p$part-${now.microsecondsSinceEpoch}';
       final video = File('${dir.path}/$id.${ext.replaceAll(_safe, '')}');
       await _move(src, video);
       String? audioPath;
       if (audio != null) {
         final wav = File('${dir.path}/$id.wav');
-        await wav.writeAsBytes(wavBytes(audio), flush: true);
+        await _writeAtomic(wav, wavBytes(audio));
         audioPath = wav.path;
       }
       final t = VideoTake(
@@ -207,22 +233,124 @@ class VideoTakeStore {
         audioLead: audioLead,
         segments: List.unmodifiable(segments),
       );
-      await File('${dir.path}/$id.json').writeAsString(jsonEncode(t._toJson()), flush: true);
+      await _writeAtomic(File('${dir.path}/$id.json'), utf8.encode(jsonEncode(t._toJson())));
       return t;
+    } on Object {
+      await _discard(dir, id);
+      rethrow;
     } finally {
-      if (await src.exists()) await src.delete();
+      _saving.remove(id);
+      try {
+        if (await src.exists()) await src.delete();
+      } on FileSystemException {
+        // Already gone, or the next start's sweep takes it.
+      }
     }
   }
 
-  /// Rename when on the same disk; otherwise copy and delete (the
-  /// recorder's temporary folder is often another file system).
-  static Future<void> _move(File from, File to) async {
+  static String _part(File f) => '${f.parent.path}/.${_name(f.path)}.part';
+
+  /// Rename when on the same disk; otherwise copy to a `.part` file beside
+  /// [to] (the recorder's temporary folder is often another file system),
+  /// then rename that into place and delete [from].
+  Future<void> _move(File from, File to) async {
     try {
-      await from.rename(to.path);
+      await rename(from, to.path);
+      return;
     } on FileSystemException {
-      await from.copy(to.path);
-      await from.delete();
+      // Another disk: copy, then rename on this one.
     }
+    final part = File(_part(to));
+    try {
+      await from.copy(part.path);
+      await rename(part, to.path);
+    } on Object {
+      if (await part.exists()) await part.delete();
+      rethrow;
+    }
+    await from.delete();
+  }
+
+  /// Writes [bytes] to a `.part` file, then renames it to [to].
+  Future<void> _writeAtomic(File to, List<int> bytes) async {
+    final part = File(_part(to));
+    try {
+      await part.writeAsBytes(bytes, flush: true);
+      await rename(part, to.path);
+    } on Object {
+      if (await part.exists()) await part.delete();
+      rethrow;
+    }
+  }
+
+  /// Deletes every file of [id] in [dir], whole or `.part`.
+  Future<void> _discard(Directory dir, String id) async {
+    try {
+      if (!await dir.exists()) return;
+      await for (final f in dir.list()) {
+        final n = _name(f.path);
+        if (f is File && (n.startsWith('$id.') || n.startsWith('.$id.'))) await f.delete();
+      }
+      await _dropIfEmpty(dir);
+    } on FileSystemException {
+      // The next start's sweep tries again.
+    }
+  }
+
+  /// Cleans up after a crash or a failed save; the app runs it when it
+  /// starts ([VideoRetention.start]). Removes, at once, half-written `.part`
+  /// files and clips without a sidecar in the store (except saves running
+  /// now), and recorder files matching [recorderTempName] in
+  /// [recorderTemps] that have not changed for [staleAfter] (a recording
+  /// in progress, even another app's, keeps writing). Returns how many files
+  /// went.
+  Future<int> sweep({
+    Iterable<Directory> recorderTemps = const [],
+    Duration staleAfter = const Duration(minutes: 10),
+  }) async {
+    var gone = 0;
+    Future<void> drop(File f) async {
+      try {
+        await f.delete();
+        gone++;
+      } on FileSystemException {
+        // In use or already gone: tried again next start.
+      }
+    }
+
+    if (await root.exists()) {
+      await for (final d in root.list()) {
+        if (d is! Directory) continue;
+        final files = [
+          await for (final f in d.list())
+            if (f is File) f,
+        ];
+        final whole = {
+          for (final f in files)
+            if (_name(f.path).endsWith('.json') && !_name(f.path).startsWith('.'))
+              _name(f.path).replaceFirst(RegExp(r'\.json$'), ''),
+        };
+        for (final f in files) {
+          final n = _name(f.path);
+          final id = (n.startsWith('.') ? n.substring(1) : n).split('.').first;
+          if (_saving.contains(id)) continue;
+          if (n.endsWith('.part') || !whole.contains(id)) await drop(f);
+        }
+        await _dropIfEmpty(d);
+      }
+    }
+    final cutoff = _clock().subtract(staleAfter);
+    for (final dir in recorderTemps) {
+      if (!await dir.exists()) continue;
+      await for (final f in dir.list()) {
+        if (f is File &&
+            recorderTempName.hasMatch(_name(f.path)) &&
+            (await f.lastModified()).isBefore(cutoff)) {
+          await drop(f);
+        }
+      }
+    }
+    return gone;
   }
 
   /// Every kept take (of [roundId] when given), oldest first.
@@ -327,16 +455,31 @@ class VideoTakeStore {
 /// Runs [VideoTakeStore.purge] now and then every [every] (a day), with
 /// the user's number of days from [keepDays].
 class VideoRetention {
-  VideoRetention(this.store, this.keepDays, {this.every = const Duration(days: 1)});
+  VideoRetention(
+    this.store,
+    this.keepDays, {
+    this.every = const Duration(days: 1),
+    this.recorderTemps = const [],
+  });
 
   final VideoTakeStore store;
   final FutureOr<int> Function() keepDays;
   final Duration every;
+
+  /// The camera recorder's temporary folders, swept on [start]
+  /// ([VideoTakeStore.sweep]).
+  final List<Directory> recorderTemps;
   Timer? _timer;
 
-  /// Purges now and starts the daily purge. Returns how many went now.
+  /// Sweeps what a crash left, purges now and starts the daily purge.
+  /// Returns how many takes went now.
   Future<int> start() async {
     _timer?.cancel();
+    try {
+      await store.sweep(recorderTemps: recorderTemps);
+    } on Object {
+      // Tried again next start; purge still runs.
+    }
     _timer = Timer.periodic(every, (_) => unawaited(runOnce().catchError((_) => 0)));
     return runOnce();
   }
