@@ -21,6 +21,7 @@ import 'dart:math' as math;
 import '../interview/delivery.dart';
 import '../interview/interview_plan.dart';
 import '../interview/interview_process.dart' show QuestionOutcome;
+import '../video/video_takes.dart' show VideoTakes;
 import 'lab.dart' show Pcm;
 
 /// One question of the round and what it tests (plan rule 2: shown before
@@ -277,6 +278,7 @@ class SpokenRound {
     required this.sink,
     this.coach,
     this.interviewer,
+    this.video,
     this.endSilence = defaultEndSilence,
     Future<void> Function(Duration)? pause,
   }) : pause = pause ?? Future<void>.delayed,
@@ -296,6 +298,11 @@ class SpokenRound {
   /// Null: the plain I1 round (no follow-ups, nothing said between
   /// questions).
   final Interviewer? interviewer;
+
+  /// Opt-in video takes (J7). Null, the default: the camera records
+  /// nothing. When set, the camera records while the microphone is open
+  /// and each kept answer's clip is paired with its audio and timestamps.
+  final VideoTakes? video;
 
   /// Silence that ends a spoken answer.
   final Duration endSilence;
@@ -412,6 +419,8 @@ class SpokenRound {
     _stopForTime = false;
     try {
       final c = _capture = await listener.listen(endSilence: endSilence);
+      // A camera failure leaves the answer audio-only.
+      await _videoDo(() => video?.answerStarted());
       _set(RoundPhase.answering);
       final stopAt = _answering == _Answering.main ? interviewer?.interruptAt(_index) : null;
       _liveSub = c.status.listen((s) {
@@ -450,6 +459,7 @@ class SpokenRound {
       final answer = await c.finish();
       final text = answer.transcript;
       if (text.isEmpty) {
+        await _videoDo(() => video?.answerDropped());
         error = 'No speech was heard. Try again, or type your answer.';
         // A follow-up can still be typed or moved past.
         _set(followingUp ? RoundPhase.typing : RoundPhase.ready);
@@ -459,16 +469,21 @@ class SpokenRound {
       final delivery = DeliveryMetrics.of(answer.segments);
       if (followingUp) {
         s.followUps.add(_followUp(Take(number: s.takes, transcript: text, delivery: delivery)));
+        await _videoDo(
+          () => video?.answerKept(question: _index, take: s.takes, part: s.followUps.length, answer: answer),
+        );
       } else {
         final number = s.takes + 1;
         final key = await takes.save(_index, number, answer.audio);
         await _keep(s, Take(number: number, transcript: text, delivery: delivery, audioKey: key));
         s.interrupted = _stopForTime;
+        await _videoDo(() => video?.answerKept(question: _index, take: number, part: 0, answer: answer));
       }
       _stopForTime = false;
       await sink.saveTranscript(_index, s.fullTranscript);
       await _afterAnswer();
     } on Object catch (e) {
+      await _videoDo(() => video?.answerDropped());
       error = 'The answer could not be written down: $e';
       _set(RoundPhase.ready);
     }
@@ -605,7 +620,19 @@ class SpokenRound {
       await takes.remove(old.audioKey!);
       old.audioKey = null;
     }
+    if (old != null && !identical(old, s.first)) {
+      await _videoDo(() => video?.takeReplaced(_index, old.number));
+    }
     s.latest = take;
+  }
+
+  /// Runs a video step; video never stops the round.
+  Future<void> _videoDo(Future<Object?>? Function() step) async {
+    try {
+      await step();
+    } on Object {
+      // RoundVideo reports its own failures.
+    }
   }
 
   /// Answer this question again; take 1 is kept for comparison.
@@ -696,7 +723,10 @@ class SpokenRound {
     await _liveSub?.cancel();
     _liveSub = null;
     live = null;
-    if (c != null) await c.cancel();
+    if (c != null) {
+      await c.cancel();
+      await _videoDo(() => video?.answerDropped());
+    }
   }
 
   /// The elements question [i] calls for that its answers covered, from

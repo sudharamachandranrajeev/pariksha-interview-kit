@@ -22,6 +22,7 @@ export 'src/version.dart';
 export 'src/vision/blazeface.dart';
 export 'src/vision/camera_coach.dart';
 export 'src/vision/face_camera.dart';
+export 'src/video/video_takes.dart';
 export 'src/vision/setup_check.dart';
 export 'src/voice/lab.dart';
 export 'src/voice/lexicon.dart';
