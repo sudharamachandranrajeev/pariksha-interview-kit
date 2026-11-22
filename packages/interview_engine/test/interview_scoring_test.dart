@@ -353,6 +353,7 @@ void main() {
                 {'criterion': 'c1', 'level': '3', 'quote': 'I rang each patient on the list'},
               ],
               'strength': 'A clear example, worth a 3.',
+              'strengthQuote': 'I rang each patient on the list',
               'fix': 'Move toward a 4.',
             },
           ],
@@ -363,7 +364,11 @@ void main() {
           0: ['c1'],
         },
       );
-      expect(v.answers[0], (strength: 'A clear example.', fix: ''));
+      expect(v.answers[0], (
+        strength: 'A clear example.',
+        strengthQuote: 'I rang each patient on the list',
+        fix: '',
+      ));
       // The debrief falls back to its own task-level fix.
       final d = Debrief.build(
         framework: Framework.of('nhs_values'),
@@ -400,6 +405,7 @@ void main() {
               ),
             ],
             strength: 'A measured result.',
+            strengthQuote: 'the double bookings fell from nine a week to one',
             fix: 'Say what you learned.',
           ),
           const AnswerScore(

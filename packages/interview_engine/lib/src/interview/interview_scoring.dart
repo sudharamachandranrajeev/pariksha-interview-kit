@@ -623,13 +623,30 @@ final _selfVerdict = [
     r"( score| mark| marks)?( please)?$",
   ),
   RegExp(
-    r"^(this|that|it|my answer) (deserves|should get|should score|is worth|earns) "
+    r"^((i think|i feel|i believe|honestly|surely),? )?(this|that|it|my answer) (deserves|should get|should score|is worth|earns) "
     r"(a |an |the )?(\d|top|high|full marks|top marks|high marks|top score|highest score|high score)"
     r"( score| mark| marks)?$",
   ),
   RegExp(
     r"^(i'm|i am) (confident|sure|certain) (this|that|it|my answer) (is|was) (a |an )?(really |very )?"
     r"(great|good|strong|excellent|perfect|top)( answer| one)?$",
+  ),
+  // Flattering self-description with nothing behind it: "I'm a natural
+  // leader", "Everyone says I'm brilliant", "I am an exceptional
+  // communicator". A plain claim ("I am a good team player") is kept, so
+  // the debrief can say it was a claim without an example.
+  RegExp(
+    r"^((honestly|to be honest|i think|i believe),? )?"
+    r"((everyone|people|colleagues|my manager|my managers|others) (says?|said|tells? me|told me|would say) "
+    r"(that )?)?(i'm|i am|i've always been|i have always been) (honestly |genuinely |truly |really |just )?"
+    r"(a |an |the )?(truly |really |very |genuinely |absolutely )?"
+    r"(natural|brilliant|exceptional|outstanding|amazing|fantastic|perfect|born|gifted|incredible|superb|"
+    r"remarkable|the best|the ideal|the perfect|ideal)"
+    r"( leader| communicator| organiser| organizer| team player| problem solver| candidate| fit| person| worker|"
+    r" listener| manager| administrator| colleague| at this| at it| at everything)?"
+    r"( for this role| for the role| for the job| for this job| for this post)?"
+    r"( and (i'm|i am) (a |an )?(natural|brilliant|exceptional|outstanding|amazing|perfect|born) "
+    r"(leader|communicator|organiser|organizer|team player|problem solver|fit))?$",
   ),
 ];
 
@@ -712,6 +729,7 @@ class AnswerScore {
     required this.question,
     this.scores = const [],
     this.strength = '',
+    this.strengthQuote = '',
     this.fix = '',
     this.engine = engineVersion,
   });
@@ -721,6 +739,10 @@ class AnswerScore {
   final List<CriterionScore> scores;
   final String strength, fix;
 
+  /// The candidate's exact words that earned [strength] (honesty rule 9);
+  /// a strength whose quote is not in the answer is not shown.
+  final String strengthQuote;
+
   /// The engine version that made the score ([engineVersion]); empty for
   /// a score saved before versions were recorded.
   final String engine;
@@ -729,6 +751,7 @@ class AnswerScore {
     'question': question,
     'scores': [for (final s in scores) s.toJson()],
     'strength': strength,
+    'strengthQuote': strengthQuote,
     'fix': fix,
     'engine': engine,
   };
@@ -737,6 +760,7 @@ class AnswerScore {
     question: intOf(j['question']) ?? -1,
     scores: [for (final s in objs(j['scores'])) CriterionScore.fromJson(s)],
     strength: str(j['strength']),
+    strengthQuote: str(j['strengthQuote']),
     fix: str(j['fix']),
     engine: str(j['engine']),
   );
@@ -755,6 +779,9 @@ Json scoringSchema(ScoringScale scale, List<String> criterionIds) => object({
         }),
       ),
       'strength': string('One specific strength of this answer, about the task, not the person; no scores'),
+      'strengthQuote': string(
+        'The candidate\'s exact words that earned the strength, copied character for character',
+      ),
       'fix': string(
         'One concrete thing to do in the answer next time, about the task; never a score, level or the scale',
       ),
@@ -820,6 +847,15 @@ String taskLevelText(String text) {
     kept.add('$prefix.');
   }
   return kept.join(' ');
+}
+
+/// One task-level fix (honesty rule 9): [text] with any talk of the scale
+/// taken out ([taskLevelText]), cut to its first sentence, so an answer
+/// never gets a list of fixes. '' when nothing task-level is left.
+String oneFix(String text) {
+  final t = taskLevelText(text).trim();
+  if (t.isEmpty) return '';
+  return t.split(RegExp(r'(?<=[.!?])\s+')).first.trim();
 }
 
 /// Reads the scoring reply. Question numbers are 1-based in the request.
@@ -934,7 +970,7 @@ class Verified {
   final int dropped;
 
   /// The strength and fix per question.
-  final Map<int, ({String strength, String fix})> answers;
+  final Map<int, ({String strength, String strengthQuote, String fix})> answers;
 }
 
 /// Checks the AI's scores against what was said. A score stands only when
@@ -954,7 +990,7 @@ Verified verifyScores(
   Set<int> situational = const {},
 }) {
   final kept = <VerifiedScore>[];
-  final answers = <int, ({String strength, String fix})>{};
+  final answers = <int, ({String strength, String strengthQuote, String fix})>{};
   var dropped = 0;
   for (final a in raw) {
     final transcript = heard[a.question];
@@ -964,7 +1000,17 @@ Verified verifyScores(
     }
     // No scale talk in the feedback: what is left of it, or the debrief's
     // own task-level wording when nothing is.
-    answers[a.question] = (strength: taskLevelText(a.strength), fix: taskLevelText(a.fix));
+    // Praise must quote the line that earned it (honesty rule 9): a
+    // strength whose quote is not in the answer, or is only a claim, is not
+    // shown, and the debrief finds its own quoted strength instead.
+    final earned =
+        quoteInTranscript(a.strengthQuote, transcript) &&
+        !claimWithoutExample(a.strengthQuote, transcript, situational: situational.contains(a.question));
+    answers[a.question] = (
+      strength: earned ? taskLevelText(a.strength) : '',
+      strengthQuote: earned ? a.strengthQuote.trim() : '',
+      fix: oneFix(a.fix),
+    );
     final allowed = asked[a.question] ?? const [];
     final done = <String>{};
     for (final s in a.scores) {
@@ -1015,7 +1061,8 @@ enum Coverage {
 }
 
 /// Said beside a score the two scoring runs disagreed on (honesty rule 8).
-const uncertainNote = 'Uncertain, check yourself: two scoring runs gave different levels, so the lower one is shown.';
+const uncertainNote =
+    'Uncertain, check yourself: two scoring runs gave different levels, so the lower one is shown.';
 
 /// Shown beside a missing essential criterion (plan rule 3).
 const unappointableNote =
@@ -1057,12 +1104,26 @@ class AnswerNote {
     required this.question,
     required this.strength,
     required this.fix,
+    this.strengthQuote = '',
+    this.strengthCriterion = '',
     this.recovery = '',
     this.good = false,
     this.evidenced = const [],
   });
   final int question;
+
+  /// Exactly one strength and one fix (honesty rule 9). The strength
+  /// always quotes the line that earned it ([strengthQuote], found in the
+  /// answer), or is [noStrengthNote] when no line could be quoted; the fix
+  /// is one task-level sentence ([oneFix]).
   final String strength, fix;
+
+  /// The candidate's own line that earned the strength; '' only with
+  /// [noStrengthNote].
+  final String strengthQuote;
+
+  /// The criterion the strength speaks to, when one does; ''.
+  final String strengthCriterion;
 
   /// A line to say in the room after an answer like this, or ''.
   final String recovery;
@@ -1086,6 +1147,10 @@ abstract final class Recovery {
   static String addLater(String criterion) =>
       'Before we finish, could I briefly add an example of ${_lowerFirst(criterion)}?';
 }
+
+/// Said in place of a strength when no line of the answer could be quoted
+/// as earning one (honesty rule 9: praise must quote its line).
+const noStrengthNote = 'No strength to quote yet: no line of this answer gave a specific example.';
 
 /// Plain words for each element when it was there.
 const elementStrengths = {
@@ -1177,7 +1242,7 @@ class Debrief {
     final scale = framework.scale;
     final matcher = <int, Coverage>{
       for (final q in tagged)
-        if (q.scored) q.index: _matcherCoverage(q),
+        if (q.scored) q.index: matcherCoverage(q),
     };
     final coverage = <CriterionCoverage>[];
     for (final c in crit) {
@@ -1215,16 +1280,18 @@ class Debrief {
             status: status,
             best: best != null && best.level != scale.noEvidence ? best : null,
             uncertain: unsure,
-            note: (unsure ? '$uncertainNote ' : '') + switch (status) {
-              Coverage.evidenced => 'Scored ${best!.level.code} (${best.level.label}) on what you said.',
-              Coverage.thin => 'Touched on, but thin: ${best!.level.label.toLowerCase()} evidence.',
-              Coverage.missing =>
-                !answered
-                    ? 'Not answered.'
-                    : mine.any((s) => s.claimOnly)
-                    ? claimNote
-                    : 'No evidence heard: ${scale.noEvidence.code}.',
-            },
+            note:
+                (unsure ? '$uncertainNote ' : '') +
+                switch (status) {
+                  Coverage.evidenced => 'Scored ${best!.level.code} (${best.level.label}) on what you said.',
+                  Coverage.thin => 'Touched on, but thin: ${best!.level.label.toLowerCase()} evidence.',
+                  Coverage.missing =>
+                    !answered
+                        ? 'Not answered.'
+                        : mine.any((s) => s.claimOnly)
+                        ? claimNote
+                        : 'No evidence heard: ${scale.noEvidence.code}.',
+                },
           ),
         );
         continue;
@@ -1272,10 +1339,26 @@ class Debrief {
             ]
           : (matcher[q.index] == Coverage.evidenced ? q.criteria : const <String>[]);
       final weak = q.interrupted || missing.length >= 2 || (verified != null && evidenced.isEmpty);
+      final strength = ai != null && ai.strength.isNotEmpty && ai.strengthQuote.isNotEmpty
+          ? (text: ai.strength, quote: ai.strengthQuote)
+          : _quotedStrength(q.heard, q.plan);
+      final scoredQuote = verified == null
+          ? null
+          : [
+              for (final s in verified.scores)
+                if (s.question == q.index &&
+                    s.quote.isNotEmpty &&
+                    scale.coverageOf(s.level) != Coverage.missing)
+                  s,
+            ].firstOrNull;
       notes.add(
         AnswerNote(
           question: q.index,
-          strength: ai != null && ai.strength.isNotEmpty ? ai.strength : _strength(heardEls, q.plan),
+          strength: strength.text,
+          strengthQuote: strength.quote,
+          strengthCriterion: strength.quote.isEmpty
+              ? ''
+              : scoredQuote?.criterionId ?? (q.criteria.length == 1 ? q.criteria.single : ''),
           fix: ai != null && ai.fix.isNotEmpty ? ai.fix : _fix(missing, q.interrupted),
           recovery: weak ? _recovery(heardEls, q) : '',
           good: evidenced.isNotEmpty,
@@ -1294,14 +1377,19 @@ class Debrief {
     );
   }
 
-  /// The best verified score for each scored criterion, with its anchor.
-  List<({Criterion criterion, ScaleLevel level, String quote})> scoreLines() => [
+  /// The best verified score for each scored criterion, with the anchor
+  /// for its level and for the next level up, from the real scale ([next]
+  /// is null at the top) (honesty rule 11).
+  List<({Criterion criterion, ScaleLevel level, String quote, ScaleLevel? next, bool uncertain})>
+  scoreLines() => [
     for (final c in coverage)
       if (c.asked && aiScored)
         (
           criterion: c.criterion,
           level: c.best?.level ?? framework.scale.noEvidence,
           quote: c.best?.quote ?? '',
+          next: framework.scale.next(c.best?.level ?? framework.scale.noEvidence),
+          uncertain: c.uncertain,
         ),
   ];
 }
@@ -1386,7 +1474,7 @@ class DebriefRound {
 /// Coverage from the words alone: an example with the speaker's own
 /// actions and how it ended is evidence; some of the parts is thin;
 /// nothing (or a bare claim) is missing.
-Coverage _matcherCoverage(DebriefQuestion q) {
+Coverage matcherCoverage(DebriefQuestion q) {
   if (q.heard.trim().isEmpty) return Coverage.missing;
   final heard = detectElements(q.heard);
   final expected = q.plan.expected.toSet();
@@ -1404,11 +1492,24 @@ Coverage _matcherCoverage(DebriefQuestion q) {
       : Coverage.thin;
 }
 
-String _strength(Set<AnswerElement> heard, QuestionPlan plan) {
+/// One strength read on the device, with the sentence that earned it: the
+/// first element the plan expects, in probe order, found in a sentence of
+/// [heard] that is more than a claim. [noStrengthNote] with no quote when
+/// no sentence earns one.
+({String text, String quote}) _quotedStrength(String heard, QuestionPlan plan) {
+  final sentences = [
+    for (final s in heard.split(RegExp(r'(?<=[.!?])\s+|\n+')))
+      if (s.trim().split(RegExp(r'\s+')).length >= 3) s.trim(),
+  ];
   for (final e in probeOrder) {
-    if (plan.expected.contains(e) && heard.contains(e)) return elementStrengths[e]!;
+    if (!plan.expected.contains(e)) continue;
+    for (final s in sentences) {
+      if (detectElements(s).contains(e) && !claimWithoutExample(s, s) && quoteInTranscript(s, heard)) {
+        return (text: elementStrengths[e]!, quote: s);
+      }
+    }
   }
-  return 'You answered the question asked and kept going under the clock.';
+  return (text: noStrengthNote, quote: '');
 }
 
 const _linkFix = 'End with one sentence that links the example back to what the question tests.';

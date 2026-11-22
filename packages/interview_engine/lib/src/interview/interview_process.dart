@@ -12,6 +12,7 @@ library;
 
 import '../question.dart';
 import 'interview_plan.dart';
+import 'interview_scoring.dart' show Framework;
 import '../json.dart';
 
 enum StageKind {
@@ -196,11 +197,25 @@ class InterviewStage {
 
 /// A whole process: its stages in order.
 class InterviewProcess {
-  const InterviewProcess({required this.id, required this.name, required this.about, required this.stages});
+  const InterviewProcess({
+    required this.id,
+    required this.name,
+    required this.about,
+    required this.stages,
+    this._frameworkId = '',
+  });
   final String id;
   final String name;
   final String about;
   final List<InterviewStage> stages;
+  final String _frameworkId;
+
+  /// The framework whose real scale this process is scored on (honesty
+  /// rule 11): set, or the one its template uses ([frameworkForProcess]).
+  String get frameworkId => _frameworkId.isNotEmpty ? _frameworkId : frameworkForProcess(id);
+
+  /// [frameworkId] as a [Framework], with its scale and anchors.
+  Framework get framework => Framework.of(frameworkId);
 
   /// The stages that will run (optional ones can be switched off).
   List<InterviewStage> get running => [
@@ -208,13 +223,19 @@ class InterviewProcess {
       if (s.included) s,
   ];
 
-  InterviewProcess withStage(int i, InterviewStage s) =>
-      InterviewProcess(id: id, name: name, about: about, stages: [...stages]..[i] = s);
+  InterviewProcess withStage(int i, InterviewStage s) => InterviewProcess(
+    id: id,
+    name: name,
+    about: about,
+    stages: [...stages]..[i] = s,
+    frameworkId: _frameworkId,
+  );
 
   Json toJson() => {
     'id': id,
     'name': name,
     'about': about,
+    'framework': frameworkId,
     'stages': [for (final s in stages) s.toJson()],
   };
 
@@ -223,8 +244,18 @@ class InterviewProcess {
     name: str(j['name']),
     about: str(j['about']),
     stages: [for (final s in objs(j['stages'])) InterviewStage.fromJson(s)],
+    frameworkId: str(j['framework']),
   );
 }
+
+/// The framework a process template scores on: NHS-style on N/O then 1 to
+/// 4, the Civil Service on 1 to 7, the private sector on a 1 to 4 rubric.
+/// A process of the user's own reads as private.
+String frameworkForProcess(String processId) => switch (processId) {
+  'nhs-style' => 'nhs_values',
+  'civil-service-style' => 'civil_service',
+  _ => 'private',
+};
 
 // ---- the templates ----
 
