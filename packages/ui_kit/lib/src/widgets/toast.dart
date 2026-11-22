@@ -77,3 +77,8 @@ ToastificationItem showToast(
     closeButton: const ToastCloseButton(showType: CloseButtonShowType.onHover),
   );
 }
+
+/// Closes every toast at once, without the exit animation: on sign-out, or
+/// at the end of a widget test, where a toast's close timer would otherwise
+/// still be pending.
+void dismissAllToasts() => toastification.dismissAll(delayForAnimation: false);

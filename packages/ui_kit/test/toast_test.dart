@@ -95,6 +95,22 @@ void main() {
         await tester.pump(const Duration(seconds: 1));
         expect(find.text('Saved the job'), findsNothing);
       });
+
+      testWidgets('dismissAllToasts closes them and leaves no timer (${b.name}, $reduced)', (tester) async {
+        await tester.pumpWidget(kitApp(const SizedBox(), brightness: b, reduced: reduced));
+        showToast(tester.element(find.byType(SizedBox).last), 'One');
+        showToast(tester.element(find.byType(SizedBox).last), 'Two');
+        // The toast list takes a few frames to insert and build the toasts.
+        for (var i = 0; i < 4; i++) {
+          await tester.pump(const Duration(milliseconds: 200));
+        }
+        expect(find.text('Two'), findsOneWidget);
+        dismissAllToasts();
+        await tester.pump(const Duration(seconds: 1));
+        expect(find.text('One'), findsNothing);
+        expect(find.text('Two'), findsNothing);
+        // The test ends here with nothing pending, or the binding fails it.
+      });
     }
   }
 }
