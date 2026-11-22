@@ -20,6 +20,8 @@ The offline mock-interview engine shared by Udyoga and Vidya. See the [repo READ
   LiteRT) run on the device. Models are downloaded only on request and checked against pinned
   SHA-256 hashes.
 - `probeNative()` checks that sherpa_onnx, LiteRT and the camera plugin load.
+- Video takes (opt-in, see below): `VideoTakeStore`, `RoundVideo`, `VideoRetention` and
+  `seekToQuote`.
 - `rankQuestions` predicts likely questions from the criteria and the app's checked fact cards
   (`EvidenceCard`), in tiers: (a) the person specification, (b) the organisation's own sources,
   (c) reported by past candidates, (d) common questions. Each says why and which tier it is from; one
@@ -28,6 +30,37 @@ The offline mock-interview engine shared by Udyoga and Vidya. See the [repo READ
   organisation and the manager, each covered (with the line that covered it) or "not covered".
 - `improveAnswer` refuses to rewrite before the candidate's own attempt, and refuses a rewrite that
   adds a number, name or achievement not in their words or story bank (`checkRewrite`).
+
+## Video takes
+
+Rule 4 used to say video frames are never stored. It now reads: **video frames are not stored,
+unless the user opts in to a video take for that session.** A video take is:
+
+- **Opt-in per session.** No video is recorded unless the app passes a `RoundVideo` to
+  `SpokenRound(video: ...)`. Apps keep the switch off by default and never remember it, and show a
+  camera indicator while `RoundVideo.recording` is true.
+- **On that device only.** `VideoTakeStore` keeps each take in a folder the app gives it, inside its
+  private storage: the camera's clip (picture only; the controller is opened without audio), a WAV
+  of the same answer from the round's microphone stream (the one Moonshine hears, so the microphone
+  is opened once), and a small JSON file with the transcript lines and their times. The JSON holds
+  file names, never full paths. Apps keep the folder out of sync and out of backups (on Android,
+  `dataExtractionRules` excludes it from cloud backup and device transfer).
+- **Never sent to an AI.** Only the transcript goes to `InterviewBrain`; a test checks that no
+  video path, file name or folder appears in a `BrainRequest` or in what the `AnswerSink` saves.
+- **Deleted after 14 days by default.** `VideoRetention` purges takes older than the user's setting
+  (1 to 90 days) at start and once a day; `VideoTakeStore.deleteAll()` is the delete-all button.
+- **Not analysed.** Nothing reads the recorded video. No emotion, eye-contact or identity analysis;
+  delivery cues stay informational only.
+
+`seekToQuote(takes, quote)` finds a debrief quote in the takes' transcript lines and gives the
+moment in the video to jump to (half a second before it). The picture and the WAV are paired with
+`VideoTake.audioLead`: audio position = video position + lead.
+
+Recording uses the `camera` plugin (`camera_desktop` on Linux, Windows and macOS). On the desktop
+the set-up frames keep coming while it records. On Android the engine asks for frames while
+recording; if the phone cannot do both, recording wins and `FaceCamera.cuesPaused` is true until it
+stops. On Linux, recording needs a GStreamer H.264 encoder (`x264enc` from plugins-ugly,
+`openh264enc`, or a VA-API one).
 
 ## Where the models live
 

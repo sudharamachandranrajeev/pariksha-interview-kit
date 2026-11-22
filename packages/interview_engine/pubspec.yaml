@@ -1,6 +1,6 @@
 name: interview_engine
 description: "Offline mock-interview engine: question plans, verified-quote scoring and on-device voice. No database and no brahma_core; the AI comes in through InterviewBrain."
-version: 0.3.0
+version: 0.4.0
 publish_to: 'none'
 repository: https://github.com/sudharamachandranrajeev/pariksha-interview-kit
 

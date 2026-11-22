@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.4.0 (unreleased)
+
+J7: video takes, opt-in per session. Rule 4 now reads "video frames are not stored, unless the user
+opts in to a video take for that session".
+
+- `VideoTakeStore`: camera clip (no sound of its own) + the answer's WAV from the round's microphone
+  stream + transcript times per take, in a folder the app keeps private; `purge(keepDays)` (default
+  14, 1 to 90), `deleteAll`, `bytesUsed`, `remove`, `removeRound`.
+- `VideoRetention`: purge at start and daily.
+- `RoundVideo` and `SpokenRound(video:)`: records each answer and follow-up while the microphone
+  listens; kept, redone and dropped answers keep, replace or delete the clip. Off unless passed.
+- `FaceCamera.startRecording`/`stopRecording` and `cuesPaused`; `RecordingFeed` from
+  `NativeCamera`. Android pauses the set-up cues only if it cannot stream frames while recording.
+- `seekToQuote`: a debrief quote to the moment in the video.
+- Testing: `FakeVideoRecorder`, `FakeCamera(recorder:)`.
+- Tests: retention, delete-all, opt-in default off, no video path in brain requests or saved
+  transcripts, quote-to-time mapping, network-off with video.
+
 ## 0.3.0 (unreleased)
 
 J6: the answer checker. The twelve honesty rules, audited and enforced; see the README table.

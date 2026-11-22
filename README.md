@@ -151,18 +151,25 @@ These rules ship with the package, so every app that uses it inherits them.
 2. **Network-off test.** Importing and starting the engine must not contact another machine.
    `test/network_off_test.dart` traps every connection and checks that none was tried. Only this
    machine is allowed (for a local Ollama).
-3. **Recordings are never synced.** Audio and video stay in app-private storage. They never go to a
-   synced table, a backup or an AI. Only the transcript is sent to the AI.
-4. **Video is opt-in.** Video takes are off unless you turn them on for a session, with a camera
-   indicator while recording.
-5. **Auto-delete.** Video takes delete themselves after **14 days** by default, and there is a
-   delete-all button.
-6. **No emotion, eye-contact or identity scoring.** Camera checks give set-up tips only.
+3. **Recordings are never synced.** Audio and video stay in app-private storage on the device that
+   made them. They never go to a synced table, a backup or an AI. Only the transcript is sent to
+   the AI.
+4. **Video frames are not stored, unless you opt in.** The camera set-up check looks at each frame
+   and drops it. The one exception is a video take: off unless you turn it on for that session
+   (never remembered), with a camera indicator while recording, kept only on that device in
+   app-private storage, never synced, backed up or sent to any AI. (This replaces the earlier
+   rule "video frames are never stored", only under these conditions.)
+5. **Auto-delete.** Video takes delete themselves after **14 days** by default (the user can change
+   it, 1 to 90 days), at app start and daily, and there is a delete-all button.
+6. **No emotion, eye-contact or identity scoring.** Camera checks give set-up tips only, and
+   delivery cues are informational, never a score. Nothing analyses the recorded video.
 
 > [!IMPORTANT]
-> Rules 1–3 have tests in the package (`privacy_test.dart`, `network_off_test.dart`): no banned
-> library or database import, no connection to another machine from any part of the engine, and
-> recordings written only inside the take store's folder. Rules 4 and 5 (video takes) arrive in J7.
+> Rules 1–5 have tests in the package (`privacy_test.dart`, `network_off_test.dart`,
+> `video_takes_test.dart`): no banned library or database import, no connection to another machine
+> from any part of the engine, recordings written only inside the take store's folder, no video
+> unless the app passes a `RoundVideo`, no video path in any AI request or saved transcript, and
+> retention and delete-all.
 
 ## Why `ui_kit` does not depend on brahma_core
 
