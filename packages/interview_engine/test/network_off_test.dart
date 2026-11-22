@@ -6,8 +6,8 @@
 // The second test runs every part of the engine that works without a device:
 // question plans and probes, process templates, criteria, a brain round trip,
 // verified-quote scoring and the debrief, a whole spoken round with test
-// doubles, the camera set-up check, the offline guard and the model manager.
-// None may reach another machine.
+// doubles, the camera set-up check, the offline guard, the model manager and
+// the shared model folder. None may reach another machine.
 
 import 'dart:io';
 
@@ -16,6 +16,8 @@ import 'package:interview_engine/interview_engine.dart';
 import 'package:interview_engine/testing.dart';
 
 import 'engine_test.dart' show CannedBrain;
+import 'interview_lab_test.dart' show fakeModel;
+import 'model_folder_test.dart' show install;
 
 bool _loopback(String host) {
   final h = host.toLowerCase().replaceAll('[', '').replaceAll(']', '');
@@ -192,12 +194,22 @@ void main() {
       }
       expect(check.results, isNotEmpty);
 
-      // The offline guard and the model manager.
+      // The offline guard, the model manager and the shared folder.
       await OfflineGuard.instance.run(() async {
         final mm = ModelManager(Directory('${tmp.path}/models'));
         expect(await mm.installed(speechModel(vadModelId)), isFalse);
         await expectLater(mm.download(speechModel(vadModelId)), throwsA(isA<ModelException>()));
       });
+      final body = List<int>.generate(100, (i) => i);
+      final m = fakeModel(body);
+      await install(Directory('${tmp.path}/own'), m, body);
+      final r = await adoptModels(
+        from: Directory('${tmp.path}/own'),
+        to: Directory('${tmp.path}/shared'),
+        models: [m],
+      );
+      expect(r.moved, [m.id]);
+
       // Let any timers or microtasks run.
       await Future<void>.delayed(const Duration(milliseconds: 50));
     });

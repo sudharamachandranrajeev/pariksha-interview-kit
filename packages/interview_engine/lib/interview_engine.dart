@@ -22,6 +22,7 @@ export 'src/vision/face_camera.dart';
 export 'src/vision/setup_check.dart';
 export 'src/voice/lab.dart';
 export 'src/voice/lexicon.dart';
+export 'src/voice/model_folder.dart';
 export 'src/voice/models.dart';
 export 'src/voice/native_engines.dart';
 export 'src/voice/round.dart';
