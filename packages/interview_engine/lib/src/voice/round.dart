@@ -122,11 +122,13 @@ abstract class AnswerSink {
   Future<void> saveTranscript(int question, String text);
 }
 
-/// One strength and one task-level fix (plan rule 6).
+/// One strength and one task-level fix (plan rule 6), with the line of
+/// the answer that earned the strength (honesty rule 9; '' when none did).
 class ContentNote {
-  const ContentNote(this.strength, this.fix);
+  const ContentNote(this.strength, this.fix, {this.quote = ''});
   final String strength;
   final String fix;
+  final String quote;
 }
 
 /// Content feedback on the transcript (the AI, when the user has one).

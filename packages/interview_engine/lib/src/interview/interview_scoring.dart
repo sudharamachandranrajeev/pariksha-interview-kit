@@ -1341,7 +1341,7 @@ class Debrief {
       final weak = q.interrupted || missing.length >= 2 || (verified != null && evidenced.isEmpty);
       final strength = ai != null && ai.strength.isNotEmpty && ai.strengthQuote.isNotEmpty
           ? (text: ai.strength, quote: ai.strengthQuote)
-          : _quotedStrength(q.heard, q.plan);
+          : quotedStrength(q.heard, plan: q.plan);
       final scoredQuote = verified == null
           ? null
           : [
@@ -1493,16 +1493,16 @@ Coverage matcherCoverage(DebriefQuestion q) {
 }
 
 /// One strength read on the device, with the sentence that earned it: the
-/// first element the plan expects, in probe order, found in a sentence of
-/// [heard] that is more than a claim. [noStrengthNote] with no quote when
-/// no sentence earns one.
-({String text, String quote}) _quotedStrength(String heard, QuestionPlan plan) {
+/// first element the [plan] expects (any element without one), in probe
+/// order, found in a sentence of [heard] that is more than a claim.
+/// [noStrengthNote] with no quote when no sentence earns one (rule 9).
+({String text, String quote}) quotedStrength(String heard, {QuestionPlan? plan}) {
   final sentences = [
     for (final s in heard.split(RegExp(r'(?<=[.!?])\s+|\n+')))
       if (s.trim().split(RegExp(r'\s+')).length >= 3) s.trim(),
   ];
   for (final e in probeOrder) {
-    if (!plan.expected.contains(e)) continue;
+    if (plan != null && !plan.expected.contains(e)) continue;
     for (final s in sentences) {
       if (detectElements(s).contains(e) && !claimWithoutExample(s, s) && quoteInTranscript(s, heard)) {
         return (text: elementStrengths[e]!, quote: s);
