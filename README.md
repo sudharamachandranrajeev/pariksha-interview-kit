@@ -27,9 +27,10 @@ This repo holds two Flutter packages that Udyoga (job search) and Vidya (study c
 Fix the interviewer once and both apps get the fix. Scores mean the same thing in both apps.
 
 > [!NOTE]
-> **Status: early (step J1).** `ui_kit` holds the shared motion and components, and Udyoga and
-> Vidya use it. The interview engine is still a skeleton: the real interviewer still lives in
-> Udyoga and moves here in the next steps.
+> **Status: early (step J2).** `ui_kit` holds the shared motion and components, and Udyoga and
+> Vidya use it. `interview_engine` now holds Udyoga's interviewer (voice, camera set-up cues,
+> question plans, probes and verified-quote scoring); Udyoga uses it. Vidya's spoken interviewer
+> comes next (J3).
 
 ## What's inside
 
@@ -97,8 +98,26 @@ MaterialApp(
 
 See [`packages/ui_kit`](packages/ui_kit) for the list of components.
 
-**Step 4. Plug in the AI.** Write a small class that `implements InterviewBrain` and calls the
-app's own AI (Udyoga's `Ai`, or Vidya's `HelpAsker` with local Ollama).
+**Step 4. Plug in the AI.** Extend `PromptedInterviewBrain` and implement `ask`: send the
+request's system prompt, text parts and JSON schema to the app's own AI and return the reply.
+The engine writes the prompts, so scoring is the same in every app.
+
+```dart
+class MyBrain extends PromptedInterviewBrain {
+  MyBrain(this.ai);
+  final MyAi ai;
+
+  @override
+  Future<Map<String, Object?>> ask(BrainRequest r) =>
+      ai.json(system: r.system, parts: r.texts, schema: r.schema, maxTokens: r.maxTokens);
+}
+```
+
+Udyoga's adapter over its `Ai` providers is `lib/domain/interview_brain.dart` in Udyoga.
+
+**Step 5. Use the shared model folder (desktop).** Point the model manager at
+`sharedModelFolder()` when it is not null, after `adoptModels` has moved any models the app
+downloaded before. See [`packages/interview_engine`](packages/interview_engine#where-the-models-live).
 
 ## How it works
 
@@ -133,8 +152,9 @@ These rules ship with the package, so every app that uses it inherits them.
 6. **No emotion, eye-contact or identity scoring.** Camera checks give set-up tips only.
 
 > [!IMPORTANT]
-> Rules 3–5 are enforced by the engine code that arrives in later steps (J2 and J7). In this
-> skeleton, rules 1 and 2 have tests.
+> Rules 1–3 have tests in the package (`privacy_test.dart`, `network_off_test.dart`): no banned
+> library or database import, no connection to another machine from any part of the engine, and
+> recordings written only inside the take store's folder. Rules 4 and 5 (video takes) arrive in J7.
 
 ## Why `ui_kit` does not depend on brahma_core
 
