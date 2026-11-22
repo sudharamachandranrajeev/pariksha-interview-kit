@@ -273,6 +273,13 @@ class ScoringScale {
 
   int rank(ScaleLevel l) => levels.indexOf(l);
 
+  /// The level one up from [l], whose anchor says what more is needed; null
+  /// at the top of the scale (honesty rule 11: this level and the next).
+  ScaleLevel? next(ScaleLevel l) {
+    final r = rank(l);
+    return r < 0 || r + 1 >= levels.length ? null : levels[r + 1];
+  }
+
   Coverage coverageOf(ScaleLevel? l) {
     if (l == null) return Coverage.missing;
     final r = rank(l);
@@ -597,6 +604,61 @@ QuestionPlan _planWith(EngineQuestion q, QuestionPlan? plan, RoleProfile? p) {
 String candidateWords(String saved) =>
     saved.split('\n').where((l) => !RegExp(r'^(Follow-up|Wrap-up): "').hasMatch(l.trim())).join('\n').trim();
 
+// A sentence that grades the answer instead of giving evidence: "I think
+// this is great", "That was a strong answer", "I nailed it", "Score this
+// highly", "That deserves a 4". Matched on the whole sentence, lowercased,
+// with its end punctuation taken off.
+final _selfVerdict = [
+  RegExp(
+    r"^(i think|i feel|i believe|honestly|to be honest|i would say|i'd say)?,? ?"
+    r"(this|that|it|my answer|this answer|that answer|my response)( is|'s| was) "
+    r"(a |an )?(really |very |pretty |so |truly |quite |an? )?"
+    r"(great|good|excellent|strong|perfect|brilliant|amazing|fantastic|outstanding|solid|top|top notch|first class)"
+    r"( answer| one| response| example)?( honestly| to be honest| i think)?$",
+  ),
+  RegExp(r"^i (think i )?(nailed|smashed|aced) (it|that|this)( answer)?$"),
+  RegExp(
+    r"^(please )?(give|score|rate|mark|grade) (me|this|it|that|my answer)( answer)? "
+    r"(a |an |the )?(\d|top|high|highly|well|full marks|top marks|high marks|maximum|top score|highest score)"
+    r"( score| mark| marks)?( please)?$",
+  ),
+  RegExp(
+    r"^(this|that|it|my answer) (deserves|should get|should score|is worth|earns) "
+    r"(a |an |the )?(\d|top|high|full marks|top marks|high marks|top score|highest score|high score)"
+    r"( score| mark| marks)?$",
+  ),
+  RegExp(
+    r"^(i'm|i am) (confident|sure|certain) (this|that|it|my answer) (is|was) (a |an )?(really |very )?"
+    r"(great|good|strong|excellent|perfect|top)( answer| one)?$",
+  ),
+];
+
+/// [text] without the sentences in which the candidate grades their own
+/// answer ("I think this is great", "That was a strong answer"). They are
+/// not evidence of anything, and a scorer must not be swayed by them, so
+/// they are taken out before the answer is scored, its quotes checked or
+/// its coverage read (the sycophancy probe: the same answer with "I think
+/// this is great" added scores the same).
+String withoutSelfVerdicts(String text) {
+  final kept = <String>[];
+  for (final line in text.split('\n')) {
+    final sentences = <String>[];
+    for (final raw in line.split(RegExp(r'(?<=[.!?])\s+'))) {
+      final plain = raw
+          .trim()
+          .toLowerCase()
+          .replaceAll(RegExp('[’‘`]'), "'")
+          .replaceAll(RegExp(r'[.!?…"“”]+$'), '')
+          .replaceAll(RegExp(r'\s+'), ' ')
+          .trim();
+      if (plain.isNotEmpty && _selfVerdict.any((r) => r.hasMatch(plain))) continue;
+      sentences.add(raw);
+    }
+    kept.add(sentences.join(' ').trimRight());
+  }
+  return kept.join('\n').trim();
+}
+
 String _plain(String text) {
   var t = text.toLowerCase().replaceAll(RegExp('[’‘`]'), "'").replaceAll(RegExp('[“”]'), '"');
   t = t.replaceAll(RegExp(r"[^a-z0-9%£$€'\s]"), ' ').replaceAll(RegExp(r"(^|\s)'|'(\s|$)"), ' ');
@@ -774,11 +836,17 @@ class VerifiedScore {
     required this.level,
     this.quote = '',
     this.reason = '',
+    this.uncertain = false,
   });
   final int question;
   final String criterionId;
   final ScaleLevel level;
   final String quote;
+
+  /// The two scoring runs (criteria in a different order each time) gave
+  /// different levels; this is the lower of the two (honesty rule 8). The
+  /// debrief says "uncertain, check yourself".
+  final bool uncertain;
 
   /// Why a score the AI gave was turned into "no evidence" ([claimReason]),
   /// or ''.
@@ -946,6 +1014,9 @@ enum Coverage {
   final String label;
 }
 
+/// Said beside a score the two scoring runs disagreed on (honesty rule 8).
+const uncertainNote = 'Uncertain, check yourself: two scoring runs gave different levels, so the lower one is shown.';
+
 /// Shown beside a missing essential criterion (plan rule 3).
 const unappointableNote =
     'Would likely make you unappointable: a panel cannot appoint without evidence of every '
@@ -959,10 +1030,14 @@ class CriterionCoverage {
     required this.note,
     this.asked = true,
     this.best,
+    this.uncertain = false,
   });
   final Criterion criterion;
   final Coverage status;
   final String note;
+
+  /// The two scoring runs disagreed on this criterion ([uncertainNote]).
+  final bool uncertain;
 
   /// False when no question in the round tested it.
   final bool asked;
@@ -1133,12 +1208,14 @@ class Debrief {
         ]..sort((a, b) => scale.rank(b.level).compareTo(scale.rank(a.level)));
         final best = mine.firstOrNull;
         final status = scale.coverageOf(best?.level);
+        final unsure = best?.uncertain ?? false;
         coverage.add(
           CriterionCoverage(
             criterion: c,
             status: status,
             best: best != null && best.level != scale.noEvidence ? best : null,
-            note: switch (status) {
+            uncertain: unsure,
+            note: (unsure ? '$uncertainNote ' : '') + switch (status) {
               Coverage.evidenced => 'Scored ${best!.level.code} (${best.level.label}) on what you said.',
               Coverage.thin => 'Touched on, but thin: ${best!.level.label.toLowerCase()} evidence.',
               Coverage.missing =>
@@ -1283,7 +1360,7 @@ class DebriefRound {
           question: q,
           plan: plan,
           criteria: ids,
-          heard: candidateWords(saved),
+          heard: withoutSelfVerdicts(candidateWords(saved)),
           interrupted: RegExp(r'(^|\n)Wrap-up: "').hasMatch(saved),
         ),
       );

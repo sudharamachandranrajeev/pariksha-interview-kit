@@ -8,6 +8,7 @@ library;
 export 'src/brain.dart';
 export 'src/interview/answer_metrics.dart';
 export 'src/interview/delivery.dart';
+export 'src/interview/double_check.dart';
 export 'src/interview/interview_plan.dart';
 export 'src/interview/interview_process.dart';
 export 'src/interview/interview_scoring.dart';

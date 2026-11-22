@@ -8,6 +8,14 @@ The offline mock-interview engine shared by Udyoga and Vidya. See the [repo READ
   so every app sends the same words.
 - Every score quotes the transcript; `verifyScores` drops any quote that is not there. Each
   `AnswerScore` records the `engineVersion` that made it.
+- `scoreTwice` scores a round twice with the criteria in a different order each time;
+  `verifyRuns` checks both and, where they disagree, shows the lower level marked "uncertain, check
+  yourself" (no confidence percentages).
+- `recheckScore` handles a dispute: it re-checks the quote and the criterion only, so pushback never
+  changes a score.
+- Sentences in which the candidate grades their own answer ("I think this is great") are taken out
+  before scoring (`withoutSelfVerdicts`), so the sycophancy probe in `test/double_check_test.dart`
+  scores the same answer the same with or without them.
 - Speech (Kokoro, Moonshine, Silero via sherpa_onnx) and the camera set-up check (BlazeFace on
   LiteRT) run on the device. Models are downloaded only on request and checked against pinned
   SHA-256 hashes.
@@ -44,5 +52,6 @@ computer: one copy in one folder. Deleting one here deletes it for Udyoga too."
 ## Testing an app that uses it
 
 `package:interview_engine/testing.dart` has test doubles (`FakeVoice`, `FakeListener`,
-`MemoryTakes`, `ListSink`, `FakeCoach`, `FakeCamera`, `spokenAnswer`, `frameMeasure`), so a widget
-test can run a spoken round with no microphone, camera or model.
+`MemoryTakes`, `ListSink`, `FakeCoach`, `FakeCamera`, `FakeSpokenEngines`, `ScriptedBrain`,
+`spokenAnswer`, `frameMeasure`), so a widget test can run a spoken round and score it with no
+microphone, camera, model or AI.

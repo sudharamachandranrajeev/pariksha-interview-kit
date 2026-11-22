@@ -11,13 +11,16 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 
+import 'src/brain.dart';
 import 'src/interview/delivery.dart' show SpokenSegment;
+import 'src/json.dart';
 import 'src/vision/blazeface.dart';
 import 'src/vision/camera_coach.dart';
 import 'src/vision/setup_check.dart';
 import 'src/voice/lab.dart' show Pcm;
 import 'src/voice/models.dart';
 import 'src/voice/round.dart';
+import 'src/voice/spoken_engines.dart';
 
 /// An interviewer voice that records what it was asked to say. Set [hold]
 /// to keep [say] from finishing until [stop] is called.
@@ -188,4 +191,74 @@ class FakeCamera implements CoachCamera {
     feeds.add(f);
     return f;
   }
+}
+
+/// An AI that answers every [BrainRequest] with [reply], and keeps the
+/// requests it was sent in [requests]. The engine's own prompts, schemas
+/// and parsing run as in an app ([PromptedInterviewBrain]).
+class ScriptedBrain extends PromptedInterviewBrain {
+  ScriptedBrain(this.reply);
+  final FutureOr<Json> Function(BrainRequest request) reply;
+  final requests = <BrainRequest>[];
+
+  @override
+  Future<Json> ask(BrainRequest request) async {
+    requests.add(request);
+    return reply(request);
+  }
+}
+
+/// Speech engines with no device behind them: [voice] and [listener] are
+/// the fakes above, recordings go to [store], and the models in
+/// [missingIds] are missing until "downloaded" (each download is recorded
+/// in [downloads]). Set [failOpen] to act as a device whose speech engines
+/// do not start.
+class FakeSpokenEngines implements SpokenEngines {
+  FakeSpokenEngines({List<String> missingIds = const [], List<CapturedAnswer>? answers})
+    : missingIds = [...missingIds],
+      listener = FakeListener(answers ?? [spokenAnswer('I rang the bank staff and every shift was covered.')]);
+
+  final List<String> missingIds;
+  final voice = FakeVoice();
+  final FakeListener listener;
+  final store = MemoryTakes();
+  final downloads = <String>[];
+  final opened = <List<String>>[];
+  var deletedAll = false;
+  var failOpen = false;
+
+  @override
+  Future<List<SpeechModel>> missing() async => [for (final id in missingIds) speechModel(id)];
+
+  @override
+  Future<void> download(SpeechModel m, {void Function(double share)? progress}) async {
+    downloads.add(m.id);
+    progress?.call(1);
+    missingIds.remove(m.id);
+  }
+
+  @override
+  Future<double> micCheck(Duration length, {void Function(double dbfs)? level}) async => -20;
+
+  @override
+  Future<(InterviewerVoice, AnswerListener)> open(List<String> texts) async {
+    if (failOpen) throw StateError('no speech engines');
+    opened.add(texts);
+    return (voice as InterviewerVoice, listener as AnswerListener);
+  }
+
+  @override
+  Future<TakeStore> takes(String roundId) async => store;
+
+  @override
+  Future<void> deleteAllTakes() async => deletedAll = true;
+
+  @override
+  Future<void> play(String key, {void Function()? onDone}) async => onDone?.call();
+
+  @override
+  Future<void> stopPlaying() async {}
+
+  @override
+  Future<void> dispose() async {}
 }
