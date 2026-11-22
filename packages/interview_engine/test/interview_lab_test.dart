@@ -72,6 +72,13 @@ SpeechModel fakeModel(
   archive: archive,
 );
 
+/// The entries of [root] a person would see: not the dot folders the
+/// manager keeps for locks and app registrations.
+List<String> visible(Directory root) => [
+  for (final e in root.listSync())
+    if (!e.path.split('/').last.startsWith('.')) e.path.split('/').last,
+];
+
 void main() {
   group('lab state machine', () {
     const spans = [SpeechSpan(Duration(seconds: 1), Duration(seconds: 4))];
@@ -185,12 +192,14 @@ void main() {
       );
       // The model plus its 64-character marker.
       expect(await mm.sizeOnDisk(m), 5000 + 64);
-      expect(root.listSync().map((e) => e.path.split('/').last), ['example-model']);
+      // Besides the model, only the lock folder (one empty lock file per model).
+      expect(visible(root), ['example-model']);
+      expect(Directory('${root.path}/.locks').listSync().map((e) => e.path.split('/').last), ['example-model.lock']);
 
       await mm.delete(m);
       expect(await mm.installed(m), isFalse);
       expect(await mm.sizeOnDisk(m), 0);
-      expect(root.listSync(), isEmpty);
+      expect(visible(root), isEmpty);
     });
 
     test('deleting the voice deletes its cached clips; the cache can be cleared alone', () async {
@@ -237,7 +246,7 @@ void main() {
         throwsA(isA<ModelException>().having((e) => e.message, 'message', contains('checksum'))),
       );
       expect(await mm.installed(m), isFalse);
-      expect(root.listSync(), isEmpty);
+      expect(visible(root), isEmpty);
     });
 
     test('a model pinned to a new hash must be downloaded again', () async {
@@ -276,7 +285,7 @@ void main() {
         missing.download(fakeModel(body)),
         throwsA(isA<ModelException>().having((e) => e.message, 'message', contains('404'))),
       );
-      expect(root.listSync(), isEmpty);
+      expect(visible(root), isEmpty);
     });
 
     test('the catalogue pins https URLs, hashes and sizes, and never a face-embedding model', () {

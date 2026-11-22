@@ -10,6 +10,7 @@ library;
 import 'dart:async';
 import 'dart:io';
 import 'dart:isolate';
+import 'dart:math' as math;
 
 import 'package:archive/archive_io.dart';
 import 'package:crypto/crypto.dart';
@@ -184,7 +185,22 @@ String formatBytes(int bytes) {
 ///
 /// Layout: `<root>/<id>/...` holds an installed model, with a `.verified`
 /// file holding the SHA-256 it was checked against. A download in progress
-/// is `<root>/<id>.part`; it is deleted if it fails or does not match.
+/// is `<root>/<id>.<pid>-<random>.part` and is unpacked into a staging
+/// folder of the same name ending `.new`, so two downloads never write to
+/// the same file; a failed or mismatched one is deleted.
+///
+/// On a desktop the folder is shared by Udyoga and Vidya (see
+/// model_folder.dart), so two apps may want the same model at once. Each
+/// model has a lock file under `<root>/.locks/`, held with an operating
+/// system file lock (and a lock inside this process for two managers in
+/// one app) while it is downloaded, installed or deleted. The second app
+/// waits, finds the model installed and checked, and does not download it
+/// again. A delete never waits: while another download holds the lock it
+/// is refused with a [ModelException].
+///
+/// The apps that use the folder say so with [registerUser], so a screen can
+/// warn that deleting a model deletes it for the other app too
+/// ([users], [modelSharingNote]).
 class ModelManager {
   ModelManager(this.root, {this.client, this.voiceCache});
 
@@ -229,76 +245,107 @@ class ModelManager {
   /// Downloads [m], checks its size and SHA-256, and installs it. A
   /// mismatch deletes the download and throws [ModelException]; nothing is
   /// installed. [onProgress] gets bytes received and the expected total.
+  ///
+  /// When another app (or another manager in this one) is downloading the
+  /// same model into the same folder, this waits for it to finish; if that
+  /// left the model installed and checked, nothing is downloaded again.
   Future<void> download(SpeechModel m, {void Function(int received, int total)? onProgress}) async {
     // Offline interview practice: no download, whatever the screen offers.
     if (OfflineGuard.instance.active) throw ModelException(offlineDownloadMessage);
     await root.create(recursive: true);
-    final part = File('${root.path}/${m.id}.part');
-    final c = client ?? http.Client();
+    final held = (await _ModelLock.acquire(root, m.id, wait: true))!;
+    final tag = '$pid-${math.Random.secure().nextInt(1 << 32).toRadixString(16)}';
+    final part = File('${root.path}/${m.id}.$tag.part');
     try {
-      final res = await c.send(http.Request('GET', Uri.parse(m.url)));
-      if (res.statusCode != 200) {
-        throw ModelException('${m.label}: the download failed (HTTP ${res.statusCode}).');
+      if (await installed(m)) {
+        onProgress?.call(m.bytes, m.bytes);
+        return;
       }
-      final sink = part.openWrite();
-      final digest = _DigestSink();
-      final hasher = sha256.startChunkedConversion(digest);
-      var received = 0;
+      // Holding the lock, so anything else of this model's is left over
+      // from a download that crashed.
+      await _clearStale(m);
+      final c = client ?? http.Client();
       try {
-        await for (final chunk in res.stream) {
-          received += chunk.length;
-          if (received > m.bytes) {
-            throw ModelException('${m.label}: the download is bigger than expected, so it was stopped.');
-          }
-          hasher.add(chunk);
-          sink.add(chunk);
-          onProgress?.call(received, m.bytes);
+        final res = await c.send(http.Request('GET', Uri.parse(m.url)));
+        if (res.statusCode != 200) {
+          throw ModelException('${m.label}: the download failed (HTTP ${res.statusCode}).');
         }
+        final sink = part.openWrite();
+        final digest = _DigestSink();
+        final hasher = sha256.startChunkedConversion(digest);
+        var received = 0;
+        try {
+          await for (final chunk in res.stream) {
+            received += chunk.length;
+            if (received > m.bytes) {
+              throw ModelException('${m.label}: the download is bigger than expected, so it was stopped.');
+            }
+            hasher.add(chunk);
+            sink.add(chunk);
+            onProgress?.call(received, m.bytes);
+          }
+        } finally {
+          await sink.close();
+        }
+        hasher.close();
+        if (received != m.bytes) {
+          throw ModelException('${m.label}: the download is incomplete ($received of ${m.bytes} bytes).');
+        }
+        if (digest.value.toString() != m.sha256) {
+          throw ModelException(
+            '${m.label}: the file does not match its published checksum, so it was deleted.',
+          );
+        }
+        await _install(m, part, tag);
       } finally {
-        await sink.close();
+        if (client == null) c.close();
       }
-      hasher.close();
-      if (received != m.bytes) {
-        throw ModelException('${m.label}: the download is incomplete ($received of ${m.bytes} bytes).');
-      }
-      if (digest.value.toString() != m.sha256) {
-        throw ModelException(
-          '${m.label}: the file does not match its published checksum, so it was deleted.',
-        );
-      }
-      await _install(m, part);
     } finally {
-      if (client == null) c.close();
       if (await part.exists()) await part.delete();
+      await held.release();
     }
   }
 
-  Future<void> _install(SpeechModel m, File verified) async {
+  /// Deletes this model's half-finished downloads and staging folders.
+  /// Called only while holding the model's lock.
+  Future<void> _clearStale(SpeechModel m) async {
+    if (!await root.exists()) return;
+    await for (final e in root.list(followLinks: false)) {
+      final name = e.uri.pathSegments.lastWhere((s) => s.isNotEmpty);
+      if (!name.startsWith('${m.id}.') || !(name.endsWith('.part') || name.endsWith('.new'))) continue;
+      await e.delete(recursive: true);
+    }
+  }
+
+  Future<void> _install(SpeechModel m, File verified, String tag) async {
     final dir = _dir(m);
-    final staging = Directory('${root.path}/${m.id}.new');
+    final staging = Directory('${root.path}/${m.id}.$tag.new');
     if (await staging.exists()) await staging.delete(recursive: true);
     await staging.create(recursive: true);
-    if (m.archive) {
-      final from = verified.path, to = staging.path;
-      await Isolate.run(() {
-        final tar = BZip2Decoder().decodeBytes(File(from).readAsBytesSync());
-        extractArchiveToDiskSync(TarDecoder().decodeBytes(tar), to);
-      });
-    } else {
-      await verified.rename('${staging.path}/${m.entry}');
+    try {
+      if (m.archive) {
+        final from = verified.path, to = staging.path;
+        await Isolate.run(() {
+          final tar = BZip2Decoder().decodeBytes(File(from).readAsBytesSync());
+          extractArchiveToDiskSync(TarDecoder().decodeBytes(tar), to);
+        });
+      } else {
+        await verified.rename('${staging.path}/${m.entry}');
+      }
+      for (final d in m.drop) {
+        final e = FileSystemEntity.typeSync('${staging.path}/$d');
+        if (e == FileSystemEntityType.directory) await Directory('${staging.path}/$d').delete(recursive: true);
+        if (e == FileSystemEntityType.file) await File('${staging.path}/$d').delete();
+      }
+      if (!await File('${staging.path}/${m.entry}').exists()) {
+        throw ModelException('${m.label}: the download does not hold ${m.entry}.');
+      }
+      await File('${staging.path}/$_marker').writeAsString(m.sha256);
+      if (await dir.exists()) await dir.delete(recursive: true);
+      await staging.rename(dir.path);
+    } finally {
+      if (await staging.exists()) await staging.delete(recursive: true);
     }
-    for (final d in m.drop) {
-      final e = FileSystemEntity.typeSync('${staging.path}/$d');
-      if (e == FileSystemEntityType.directory) await Directory('${staging.path}/$d').delete(recursive: true);
-      if (e == FileSystemEntityType.file) await File('${staging.path}/$d').delete();
-    }
-    if (!await File('${staging.path}/${m.entry}').exists()) {
-      await staging.delete(recursive: true);
-      throw ModelException('${m.label}: the download does not hold ${m.entry}.');
-    }
-    await File('${staging.path}/$_marker').writeAsString(m.sha256);
-    if (await dir.exists()) await dir.delete(recursive: true);
-    await staging.rename(dir.path);
   }
 
   /// Bytes held by [retiredModelIds] folders still on this device.
@@ -324,13 +371,46 @@ class ModelManager {
 
   /// Deletes [m] and any half-finished download of it. Deleting a voice
   /// also deletes the clips it made.
+  ///
+  /// In a shared folder this deletes it for every app that uses the folder
+  /// (say so first: [modelSharingNote]). While a download of [m] is running,
+  /// here or in another app, nothing is deleted and a [ModelException]
+  /// says so.
   Future<void> delete(SpeechModel m) async {
-    for (final e in [_dir(m), Directory('${root.path}/${m.id}.new')]) {
-      if (await e.exists()) await e.delete(recursive: true);
+    if (await root.exists()) {
+      final held = await _ModelLock.acquire(root, m.id, wait: false);
+      if (held == null) throw ModelException(modelBusyMessage(m));
+      try {
+        if (await _dir(m).exists()) await _dir(m).delete(recursive: true);
+        await _clearStale(m);
+      } finally {
+        await held.release();
+      }
     }
-    final part = File('${root.path}/${m.id}.part');
-    if (await part.exists()) await part.delete();
     if (m.role == ModelRole.voice) await clearVoiceCache();
+  }
+
+  // ---- who shares the folder ----
+
+  Directory get _usersDir => Directory('${root.path}/$usersFolderName');
+
+  /// Records that [app] (a short id such as `udyoga` or `vidya`) uses this
+  /// folder. Apps call it when they open their model manager, so the other
+  /// app's screens can say the models are shared.
+  Future<void> registerUser(String app) async {
+    final id = app.trim().toLowerCase();
+    if (!RegExp(r'^[a-z0-9_-]+$').hasMatch(id)) throw ArgumentError.value(app, 'app', 'a short lowercase id');
+    await _usersDir.create(recursive: true);
+    await File('${_usersDir.path}/$id').writeAsString('');
+  }
+
+  /// The ids of the apps that registered with [registerUser], sorted.
+  Future<List<String>> users() async {
+    if (!await _usersDir.exists()) return const [];
+    return [
+      await for (final e in _usersDir.list(followLinks: false))
+        if (e is File) e.uri.pathSegments.last,
+    ]..sort();
   }
 
   /// Bytes the voice's ready-made clips take (0 with none).
@@ -348,6 +428,114 @@ class ModelManager {
   Future<void> clearVoiceCache() async {
     final d = voiceCache;
     if (d != null && await d.exists()) await d.delete(recursive: true);
+  }
+}
+
+/// The folder under a model folder that holds one lock file per model.
+const lockFolderName = '.locks';
+
+/// The folder under a model folder where apps register ([ModelManager.registerUser]).
+const usersFolderName = '.users';
+
+/// The apps of the suite that share the desktop model folder, by id.
+const modelFolderApps = {'udyoga': 'Udyoga', 'vidya': 'Vidya'};
+
+/// An app's name for [id]: "Udyoga" for `udyoga`; an unknown id with its
+/// first letter in capitals.
+String appName(String id) =>
+    modelFolderApps[id] ?? (id.isEmpty ? id : '${id[0].toUpperCase()}${id.substring(1)}');
+
+/// Said when a delete is refused because the model is being downloaded.
+String modelBusyMessage(SpeechModel m) =>
+    '${m.label} is being downloaded right now, by this app or another app that shares the model folder. '
+    'Try again when the download finishes.';
+
+/// What a models list (and a delete confirmation) says about who else uses
+/// the models, for the app [app] (an id from [modelFolderApps]).
+///
+/// [shared] is true when the models are in the shared desktop folder
+/// ([sharedModelFolder] was not null); [users] are the apps registered in it
+/// ([ModelManager.users]). In a shared folder, deleting a model deletes it
+/// for the other app too, and the note says so by name.
+String modelSharingNote({required String app, required bool shared, Iterable<String> users = const []}) {
+  final me = appName(app);
+  final others = {
+    for (final u in users)
+      if (u != app) appName(u),
+  }.toList()..sort();
+  final siblings = [
+    for (final e in modelFolderApps.entries)
+      if (e.key != app) e.value,
+  ];
+  if (!shared) {
+    return 'These models are $me\'s own copy on this device. ${siblings.isEmpty ? 'Other apps keep' : '${_list(siblings)} keeps'} '
+        'its own copy, so deleting one here does not affect ${siblings.isEmpty ? 'them' : _list(siblings)}.';
+  }
+  if (others.isNotEmpty) {
+    return 'These models are shared with ${_list(others)} on this computer: one copy in one folder. Deleting one '
+        'here deletes it for ${_list(others)} too.';
+  }
+  return 'These models are kept in one folder on this computer, shared with ${_list(siblings)} when it is '
+      'installed. Deleting one here deletes it for ${_list(siblings)} too.';
+}
+
+String _list(List<String> names) => switch (names.length) {
+  0 => 'other apps',
+  1 => names.single,
+  _ => '${names.sublist(0, names.length - 1).join(', ')} and ${names.last}',
+};
+
+/// One model's lock: an operating system lock on `<root>/.locks/<id>.lock`
+/// (so another app waits), plus a lock in this process (file locks do not
+/// keep out a second manager in the same process). Lock files are never
+/// deleted: deleting one while another app waits on it would let two hold
+/// it at once.
+class _ModelLock {
+  _ModelLock._(this._path, this._file, this._mine);
+
+  static final _inProcess = <String, Completer<void>>{};
+
+  final String _path;
+  final RandomAccessFile _file;
+  final Completer<void> _mine;
+
+  /// Takes the lock, waiting for it when [wait]; without [wait] gives null
+  /// when someone else holds it.
+  static Future<_ModelLock?> acquire(Directory root, String id, {required bool wait}) async {
+    final dir = Directory('${root.path}/$lockFolderName');
+    await dir.create(recursive: true);
+    final path = File('${dir.path}/$id.lock').absolute.path;
+    for (var other = _inProcess[path]; other != null; other = _inProcess[path]) {
+      if (!wait) return null;
+      await other.future;
+    }
+    final mine = _inProcess[path] = Completer<void>();
+    RandomAccessFile? file;
+    try {
+      file = await File(path).open(mode: FileMode.append);
+      await file.lock(wait ? FileLock.blockingExclusive : FileLock.exclusive);
+      return _ModelLock._(path, file, mine);
+    } on FileSystemException {
+      await file?.close();
+      _free(path, mine);
+      if (!wait) return null;
+      rethrow;
+    }
+  }
+
+  static void _free(String path, Completer<void> mine) {
+    if (identical(_inProcess[path], mine)) _inProcess.remove(path);
+    if (!mine.isCompleted) mine.complete();
+  }
+
+  Future<void> release() async {
+    try {
+      await _file.unlock();
+    } on FileSystemException {
+      // Closing the file below drops the lock anyway.
+    }
+    await _file.close();
+    _free(_path, _mine);
   }
 }
 

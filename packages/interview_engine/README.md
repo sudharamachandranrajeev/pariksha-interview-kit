@@ -28,6 +28,19 @@ they were installed move across (single files are hashed again), so nothing is d
 A model the other app already installed is kept and the duplicate removed. Anything that fails the
 check stays where it was and is downloaded again when wanted.
 
+**Two apps at once.** Each model has a lock file in `<folder>/.locks/`, held with an operating
+system file lock while it downloads, installs or is deleted. If Udyoga and Vidya ask for the same
+model together, one downloads it and the other waits, finds it installed and checked, and does not
+download it again. Each download writes to its own temporary file (`<id>.<pid>-<random>.part`), so
+two downloads never write to one file. A delete never waits: while a download of that model is
+running, the delete is refused with a message saying so.
+
+**Deleting removes it for both apps.** Apps call `registerUser('udyoga')` or
+`registerUser('vidya')` on their model manager, and `users()` lists who has used the folder.
+`modelSharingNote(app: ..., shared: ..., users: ...)` gives the sentence to show above the models
+list and in the delete confirmation, for example "These models are shared with Udyoga on this
+computer: one copy in one folder. Deleting one here deletes it for Udyoga too."
+
 ## Testing an app that uses it
 
 `package:interview_engine/testing.dart` has test doubles (`FakeVoice`, `FakeListener`,
