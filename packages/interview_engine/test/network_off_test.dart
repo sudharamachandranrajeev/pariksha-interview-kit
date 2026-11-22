@@ -216,4 +216,40 @@ void main() {
     await tmp.delete(recursive: true);
     expect(trap.attempts, isEmpty);
   });
+
+  test('opt-in video takes (store, round hook, seek, retention, delete all) make no network calls', () async {
+    final trap = _Trap();
+    final tmp = await Directory.systemTemp.createTemp('engine-network-off-video-');
+    await _offline(trap, () async {
+      final store = VideoTakeStore(Directory('${tmp.path}/video-takes'));
+      final video = RoundVideo(
+        roundId: 'r',
+        recorder: FakeVideoRecorder(Directory('${tmp.path}/camera')),
+        store: store,
+      );
+      final spoken = SpokenRound(
+        questions: const [RoundQuestion('Why this role?', tests: 'Motivation.')],
+        voice: FakeVoice(),
+        listener: FakeListener([spokenAnswer('Because I like the work and the team.')]),
+        takes: MemoryTakes(),
+        sink: ListSink(),
+        video: video,
+        pause: (_) async {},
+      )..start();
+      await spoken.ask();
+      await spoken.done();
+      await spoken.close();
+      final kept = await store.list();
+      expect(kept, hasLength(1));
+      expect(seekToQuote(kept, 'I like the work'), isNotNull);
+      final retention = VideoRetention(store, () => VideoTakeStore.defaultKeepDays);
+      expect(await retention.start(), 0);
+      retention.stop();
+      expect(await store.bytesUsed(), greaterThan(0));
+      await store.deleteAll();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    });
+    await tmp.delete(recursive: true);
+    expect(trap.attempts, isEmpty);
+  });
 }

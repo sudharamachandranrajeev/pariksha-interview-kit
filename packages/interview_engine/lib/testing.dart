@@ -7,6 +7,7 @@
 library;
 
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
@@ -14,6 +15,7 @@ import 'package:flutter/widgets.dart';
 import 'src/brain.dart';
 import 'src/interview/delivery.dart' show SpokenSegment;
 import 'src/json.dart';
+import 'src/video/video_takes.dart';
 import 'src/vision/blazeface.dart';
 import 'src/vision/camera_coach.dart';
 import 'src/vision/setup_check.dart';
@@ -168,11 +170,57 @@ class FakeFeed implements CoachFeed {
   Future<void> close() async => closed = true;
 }
 
+/// A feed that can also record, through [recorder].
+class FakeRecordingFeed extends FakeFeed implements RecordingFeed {
+  FakeRecordingFeed(this.recorder);
+  @override
+  final VideoRecorder recorder;
+}
+
+/// A recorder with no camera: each take is a small file of made-up bytes
+/// in [dir], standing in for the camera's temporary file. Set [failStart]
+/// to act as a camera that will not record, and [pausesCues] as one that
+/// cannot stream frames while it records.
+class FakeVideoRecorder implements VideoRecorder {
+  FakeVideoRecorder(this.dir, {this.pausesCues = false, this.failStart = false});
+  final Directory dir;
+  @override
+  bool pausesCues;
+  bool failStart;
+  var starts = 0, stops = 0, cancels = 0;
+  bool recording = false;
+
+  @override
+  Future<void> start() async {
+    if (failStart) throw StateError('no camera');
+    starts++;
+    recording = true;
+  }
+
+  @override
+  Future<String> stop() async {
+    recording = false;
+    stops++;
+    await dir.create(recursive: true);
+    final f = File('${dir.path}/fake-video-$stops.mp4');
+    await f.writeAsBytes(List.filled(1024, 7), flush: true);
+    return f.path;
+  }
+
+  @override
+  Future<void> cancel() async {
+    recording = false;
+    cancels++;
+  }
+}
+
 /// A camera with no device behind it. [ready] says whether the face model
-/// is there; a download just flips it.
+/// is there; a download just flips it. With a [recorder], its feeds can
+/// record video takes.
 class FakeCamera implements CoachCamera {
-  FakeCamera({this.ready = true});
+  FakeCamera({this.ready = true, this.recorder});
   bool ready;
+  final VideoRecorder? recorder;
   final feeds = <FakeFeed>[];
   var downloads = 0;
   @override
@@ -187,7 +235,8 @@ class FakeCamera implements CoachCamera {
 
   @override
   Future<CoachFeed> open() async {
-    final f = FakeFeed();
+    final r = recorder;
+    final f = r == null ? FakeFeed() : FakeRecordingFeed(r);
     feeds.add(f);
     return f;
   }
@@ -216,7 +265,9 @@ class ScriptedBrain extends PromptedInterviewBrain {
 class FakeSpokenEngines implements SpokenEngines {
   FakeSpokenEngines({List<String> missingIds = const [], List<CapturedAnswer>? answers})
     : missingIds = [...missingIds],
-      listener = FakeListener(answers ?? [spokenAnswer('I rang the bank staff and every shift was covered.')]);
+      listener = FakeListener(
+        answers ?? [spokenAnswer('I rang the bank staff and every shift was covered.')],
+      );
 
   final List<String> missingIds;
   final voice = FakeVoice();
