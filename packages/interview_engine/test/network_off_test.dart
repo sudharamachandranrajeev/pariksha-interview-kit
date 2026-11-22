@@ -3,13 +3,19 @@
 // socket made inside the zone is trapped; connections to this machine (for a
 // local Ollama) are allowed. Same approach as Udyoga's offline guard.
 //
-// J2 moves Udyoga's OfflineGuard into this package; this test then grows to
-// cover it. For J0 it proves the import and start-up path is quiet.
+// The second test runs every part of the engine that works without a device:
+// question plans and probes, process templates, criteria, a brain round trip,
+// verified-quote scoring and the debrief, a whole spoken round with test
+// doubles, the camera set-up check, the offline guard and the model manager.
+// None may reach another machine.
 
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:interview_engine/interview_engine.dart';
+import 'package:interview_engine/testing.dart';
+
+import 'engine_test.dart' show CannedBrain;
 
 bool _loopback(String host) {
   final h = host.toLowerCase().replaceAll('[', '').replaceAll(']', '');
@@ -101,19 +107,101 @@ void main() {
     expect(trap.attempts, ['192.0.2.10', '192.0.2.11']);
   });
 
-  test('engine import and start-up make no network calls', () async {
+  test('the engine\'s plans, scoring, spoken round, camera check and models make no network calls', () async {
     final trap = _Trap();
+    final tmp = await Directory.systemTemp.createTemp('engine-network-off-');
     await _offline(trap, () async {
-      final q = EngineQuestion.fromJson({
-        'question': 'Why this role?',
-        'lookFor': ['Motivation'],
+      // Plans, probes and processes.
+      const q = EngineQuestion({
+        'question': 'Tell us about a time you covered a gap at short notice.',
+        'category': 'Behavioural',
+        'why': 'Problem solving.',
       });
-      expect(EngineQuestion.fromJson(q.toJson()).question, q.question);
-      const s = QuotedScore(criterion: 'Motivation', score: null, quote: '');
-      expect(s.score, isNull);
-      // Let any start-up timers or microtasks run.
+      final plan = templatePlan(q);
+      expect(plan.expected, hasLength(6));
+      expect(ProbePicker.next(plan: plan, heard: 'We managed.', asked: const []), isNotNull);
+      expect(mergePlans(const [q], const []), hasLength(1));
+      for (final t in processTemplates) {
+        expect(t.stages.first.roundQuestions(), isNotEmpty);
+      }
+
+      // Criteria, a brain round trip and verified-quote scoring.
+      final criteria = parseCriteria({
+        'criteria': [
+          {
+            'text': 'Managing a busy diary',
+            'essential': true,
+            'kind': 'experience',
+            'assessBy': [],
+            'question': '',
+          },
+        ],
+      });
+      final profile = RoleProfile(id: 'p', title: 'Clerk', frameworkId: 'nhs_values', criteria: criteria);
+      const answer = 'I moved the overflow to a Tuesday session. As a result bookings fell from nine to one.';
+      final round = DebriefRound.of(
+        questions: questionsFromProfile(profile),
+        answers: {1: answer},
+        profile: profile,
+      );
+      final brain = CannedBrain([
+        {
+          'answers': [
+            {
+              'question': 2,
+              'scores': [
+                {'criterion': criteria.single.id, 'level': '3', 'quote': 'I moved the overflow'},
+              ],
+              'strength': 'A clear example.',
+              'fix': 'Say what you learned.',
+            },
+          ],
+        },
+      ]);
+      final raw = await brain.scoreRound(
+        role: 'Clerk',
+        framework: profile.framework,
+        criteria: criteria,
+        answers: [
+          (index: 1, question: 'Q?', criteria: [criteria.single.id], answer: answer),
+        ],
+      );
+      final verified = verifyScores(raw, profile.framework.scale, heard: round.heard, asked: round.asked);
+      expect(verified.scores, isNotEmpty);
+      Debrief.build(framework: profile.framework, round: round, verified: verified);
+
+      // A whole spoken round with test doubles.
+      final voice = FakeVoice();
+      final spoken = SpokenRound(
+        questions: const [RoundQuestion('Why this role?', tests: 'Motivation.')],
+        voice: voice,
+        listener: FakeListener([spokenAnswer('Because I like the work and the team.')]),
+        takes: MemoryTakes(),
+        sink: ListSink(),
+        pause: (_) async {},
+      )..start();
+      await spoken.ask();
+      await spoken.done();
+      await spoken.close();
+      expect(voice.said, isNotEmpty);
+
+      // The camera set-up check.
+      final check = SetupChecker();
+      for (var i = 0; i < 15; i++) {
+        check.add(frameMeasure());
+      }
+      expect(check.results, isNotEmpty);
+
+      // The offline guard and the model manager.
+      await OfflineGuard.instance.run(() async {
+        final mm = ModelManager(Directory('${tmp.path}/models'));
+        expect(await mm.installed(speechModel(vadModelId)), isFalse);
+        await expectLater(mm.download(speechModel(vadModelId)), throwsA(isA<ModelException>()));
+      });
+      // Let any timers or microtasks run.
       await Future<void>.delayed(const Duration(milliseconds: 50));
     });
+    await tmp.delete(recursive: true);
     expect(trap.attempts, isEmpty);
   });
 }

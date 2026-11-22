@@ -1,61 +1,38 @@
 /// One interview question, as the engine sees it.
 ///
-/// This replaces Udyoga's `PracticeQuestion` at the package seam: plain
-/// data with no database row and no app schema behind it. Each app maps its
-/// own question type to and from this one.
+/// This is the package seam for Udyoga's `PracticeQuestion`: plain data
+/// with no database row behind it. It keeps the JSON it was made from in
+/// [j], so keys the engine adds (`criteria`, `seconds`, `fixedTime`) and
+/// keys an app adds for itself travel with the question and come back out
+/// unchanged. Each app maps its own question type to and from this one
+/// (Udyoga's `PracticeQuestion` is the same shape, so it is an alias).
 library;
 
-/// How hard a question is meant to be.
-enum Difficulty { standard, hard, toughest }
+import 'json.dart';
 
 /// A question the interviewer asks, with what the panel is testing and
 /// what a top answer includes. The criteria in [lookFor] are fixed before
 /// the candidate answers and are shown with the question (honesty rule 1).
 class EngineQuestion {
-  const EngineQuestion({
-    required this.question,
-    this.category = '',
-    this.why = '',
-    this.lookFor = const [],
-    this.difficulty = Difficulty.standard,
-  });
+  const EngineQuestion(this.j);
 
-  /// Reads the shape Udyoga's AI already returns: `question`, `category`,
-  /// `why`, `lookFor` and `difficulty`. Unknown or missing fields fall back
-  /// to empty values, never to invented ones.
-  factory EngineQuestion.fromJson(Map<String, Object?> j) => EngineQuestion(
-    question: j['question'] is String ? j['question'] as String : '',
-    category: j['category'] is String ? j['category'] as String : '',
-    why: j['why'] is String ? j['why'] as String : '',
-    lookFor: [
-      for (final s in (j['lookFor'] is List ? j['lookFor'] as List : const []))
-        if (s is String) s,
-    ],
-    difficulty: Difficulty.values.firstWhere(
-      (d) => d.name == j['difficulty'],
-      orElse: () => Difficulty.standard,
-    ),
-  );
+  /// The question's JSON: `question`, `category`, `why`, `lookFor`,
+  /// `difficulty`, plus any other keys. Missing or wrongly typed fields
+  /// read as empty values, never as invented ones.
+  final Json j;
 
   /// The question as the candidate hears or reads it.
-  final String question;
+  String get question => str(j['question']);
 
   /// For example Behavioural, Values, Technical, Situational or Motivation.
-  final String category;
+  String get category => str(j['category']);
 
   /// What the panel is testing with this question.
-  final String why;
+  String get why => str(j['why']);
 
   /// What a top answer includes: the fixed scoring criteria.
-  final List<String> lookFor;
+  List<String> get lookFor => strs(j['lookFor']);
 
-  final Difficulty difficulty;
-
-  Map<String, Object?> toJson() => {
-    'question': question,
-    'category': category,
-    'why': why,
-    'lookFor': lookFor,
-    'difficulty': difficulty.name,
-  };
+  /// `standard`, `hard` or `toughest`; empty when not given.
+  String get difficulty => str(j['difficulty']);
 }
