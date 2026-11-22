@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.2.0 (unreleased)
+
+J3: what Vidya's spoken interviewer needs, shared so both apps get it.
+
+- Two apps can share the desktop model folder safely: an OS file lock per model while it downloads,
+  installs or is deleted; each download writes to its own temporary file; a second app waits and
+  uses the first app's checked model instead of downloading again; a delete during a download is
+  refused.
+- `registerUser`/`users` and `modelSharingNote`: screens say the models are shared with the other
+  app and that deleting one deletes it there too.
+- `scoreTwice` and `verifyRuns`: each round is scored twice with the criteria shuffled; where the
+  runs disagree the lower level shows, marked "uncertain, check yourself".
+- `recheckScore`: a dispute re-checks the quote and the criterion; pushback never changes a score.
+- `withoutSelfVerdicts`: "I think this is great" and the like are taken out before scoring (the
+  sycophancy probe). Scores made by 0.1.0 did not do this, hence the new version.
+- `ScoringScale.next` for the next level's anchor.
+- `testing.dart`: `ScriptedBrain` and `FakeSpokenEngines`.
+
 ## 0.1.0 (unreleased)
 
 J2: the interviewer moves here from Udyoga, with no change in behaviour.
