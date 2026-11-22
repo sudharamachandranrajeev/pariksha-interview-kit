@@ -4,9 +4,14 @@
 /// whether it was on. Only its three switches are remembered, on this
 /// device ([CoachPrefs]). Frames are measured in memory and dropped (face_camera.dart),
 /// nothing is sent or synced, and nothing it sees reaches a score.
+///
+/// A [RecordingFeed] can also record opt-in video takes (J7) for the
+/// round; those are kept by video_takes.dart under its own rules, never by
+/// the coach.
 library;
 
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
@@ -14,6 +19,7 @@ import 'package:flutter/widgets.dart';
 import '../interview/interview_plan.dart' show CoachPrefs;
 
 export '../interview/interview_plan.dart' show CoachPrefs;
+import '../video/video_takes.dart' show VideoRecorder;
 import '../voice/models.dart';
 import 'face_camera.dart';
 import 'setup_check.dart';
@@ -59,9 +65,39 @@ class NativeCoachCamera implements CoachCamera {
   Future<CoachFeed> open() async => _NativeFeed(await FaceCamera.open(_models.path(model)));
 }
 
-class _NativeFeed implements CoachFeed {
-  _NativeFeed(this._cam);
+/// A feed that can also record opt-in video takes (J7).
+abstract class RecordingFeed implements CoachFeed {
+  VideoRecorder get recorder;
+}
+
+class _CameraRecorder implements VideoRecorder {
+  _CameraRecorder(this._cam);
   final FaceCamera _cam;
+
+  @override
+  bool get pausesCues => _cam.cuesPaused;
+
+  @override
+  Future<void> start() => _cam.startRecording();
+
+  @override
+  Future<String> stop() => _cam.stopRecording();
+
+  @override
+  Future<void> cancel() async {
+    if (!_cam.recording) return;
+    final f = await _cam.stopRecording();
+    final file = File(f);
+    if (await file.exists()) await file.delete();
+  }
+}
+
+class _NativeFeed implements RecordingFeed {
+  _NativeFeed(this._cam) : recorder = _CameraRecorder(_cam);
+  final FaceCamera _cam;
+
+  @override
+  final VideoRecorder recorder;
 
   @override
   ValueListenable<FrameMeasure?> get measures => _cam.measure;

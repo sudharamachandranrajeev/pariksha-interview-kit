@@ -1,7 +1,10 @@
 /// The lab's camera: `camera` (CameraX on Android) or `camera_desktop`
 /// (GStreamer on Linux, Windows), with BlazeFace drawing a box round the
-/// face. Each frame is read in memory, measured and dropped; no frame is
-/// ever written anywhere.
+/// face. Each frame is read in memory, measured and dropped. The only
+/// exception is an opt-in video take ([FaceCamera.startRecording], J7): the
+/// user turns it on per session, the clip goes to the app's own private
+/// storage (video_takes.dart), and the frames the face finder reads are
+/// still dropped.
 library;
 
 import 'dart:io';
@@ -98,8 +101,66 @@ class FaceCamera {
     }
   }
 
+  /// True while frames do not reach the face finder because the camera is
+  /// recording and cannot stream at the same time.
+  bool cuesPaused = false;
+
+  /// Starts an opt-in video take (J7). The controller was opened with
+  /// `enableAudio: false`, so the clip has no sound: the round's own WAV
+  /// is the audio. On Linux and Windows camera_desktop records from a
+  /// branch of the same pipeline (a GStreamer tee on Linux), so frames keep
+  /// coming. On Android the frames are handed over with the recording; a
+  /// camera that refuses both at once records alone and the cues pause.
+  Future<void> startRecording() async {
+    if (_closed) throw StateError('The camera is closed.');
+    if (Platform.isAndroid) {
+      if (controller.value.isStreamingImages) await controller.stopImageStream();
+      try {
+        await controller.startVideoRecording(onAvailable: _onFrame);
+        cuesPaused = false;
+      } on CameraException {
+        await controller.startVideoRecording();
+        cuesPaused = true;
+      }
+    } else {
+      // The controller marks the stream stopped (no onAvailable), but the
+      // desktop stream keeps running beside the recording; the flag is
+      // put back once recording stops, so close() still stops the stream.
+      await controller.startVideoRecording();
+    }
+  }
+
+  /// Stops the video take and returns its temporary file; the frames carry
+  /// on as before.
+  Future<String> stopRecording() async {
+    final f = await controller.stopVideoRecording();
+    await _resumeStream();
+    return f.path;
+  }
+
+  Future<void> _resumeStream() async {
+    cuesPaused = false;
+    if (_closed || controller.value.isStreamingImages) return;
+    if (Platform.isAndroid) {
+      await controller.startImageStream(_onFrame);
+    } else {
+      controller.value = controller.value.copyWith(isStreamingImages: true);
+    }
+  }
+
+  bool get recording => controller.value.isRecordingVideo;
+
   Future<void> close() async {
     if (_closed) return;
+    if (recording) {
+      // A take still recording when the camera closes is not kept.
+      try {
+        final f = await controller.stopVideoRecording();
+        await File(f.path).delete();
+      } on Object {
+        // Gone with the camera.
+      }
+    }
     _closed = true;
     if (controller.value.isStreamingImages) await controller.stopImageStream();
     await controller.dispose();
