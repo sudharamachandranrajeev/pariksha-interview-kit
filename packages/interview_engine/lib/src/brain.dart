@@ -12,8 +12,12 @@
 /// in every app.
 library;
 
+import 'dart:convert';
+
+import 'interview/evidence.dart';
 import 'interview/interview_plan.dart';
 import 'interview/interview_scoring.dart';
+import 'interview/rewrite_check.dart';
 import 'json.dart';
 import 'question.dart';
 import 'schema.dart';
@@ -57,6 +61,25 @@ abstract interface class InterviewBrain {
     required List<Criterion> criteria,
     required List<RoundAnswer> answers,
   });
+
+  /// Rewrites the candidate's own [answer] to [question] so it shows
+  /// [criterion] better and applies [fix], using only what is in the answer
+  /// and the [storyBank]. Returns the rewrite as text. Never call it before
+  /// the candidate's own attempt: use [improveAnswer], which gates it and
+  /// checks the result for inventions (honesty rule 7).
+  Future<String> rewriteAnswer({
+    required String question,
+    required String criterion,
+    required String fix,
+    required String answer,
+    List<String> storyBank = const [],
+  });
+
+  /// Words each of [questions] as a panel would ask it, in the same order.
+  /// May return fewer (the rest keep their wording). Every rewording is
+  /// checked by [wordPredictedQuestions]: one that adds a number, name or
+  /// claim not in the original is not used.
+  Future<List<String>> wordQuestions({required String role, required List<String> questions});
 }
 
 /// One structured request to the app's model: a system prompt, text parts
@@ -125,6 +148,126 @@ abstract class PromptedInterviewBrain implements InterviewBrain {
     );
     return parseScoring(data);
   }
+
+  @override
+  Future<String> rewriteAnswer({
+    required String question,
+    required String criterion,
+    required String fix,
+    required String answer,
+    List<String> storyBank = const [],
+  }) async {
+    final data = await ask(
+      rewriteRequest(
+        question: question,
+        criterion: criterion,
+        fix: fix,
+        answer: answer,
+        storyBank: storyBank,
+      ),
+    );
+    return str(data['answer']);
+  }
+
+  @override
+  Future<List<String>> wordQuestions({required String role, required List<String> questions}) async {
+    if (questions.isEmpty) return const [];
+    final data = await ask(wordingRequest(role: role, questions: questions));
+    return strs(data['questions']);
+  }
+}
+
+/// The JSON object in a model's text reply, even with words or a code
+/// fence around it: for apps whose AI connection returns text (a local
+/// Ollama server as much as a cloud model), so every model's reply goes
+/// through the same checks (honesty rule 12). Throws a [FormatException]
+/// in plain words when there is none.
+Json replyJson(String reply) {
+  final start = reply.indexOf('{'), end = reply.lastIndexOf('}');
+  if (start >= 0 && end > start) {
+    try {
+      if (jsonDecode(reply.substring(start, end + 1)) case final Map m) return m.cast<String, Object?>();
+    } on FormatException {
+      // Said below.
+    }
+  }
+  throw const FormatException(
+    'The AI did not reply in the form asked for, so nothing was scored. Try again, or try another AI.',
+  );
+}
+
+/// The system prompt for a text-only AI connection: the request's own,
+/// with the reply's JSON schema spelled out.
+String textInstructions(BrainRequest r) =>
+    '${r.system}\n\nReply with one JSON object only, with no other text before or after it. It must match '
+    'this JSON schema exactly (every property present):\n${jsonEncode(r.schema)}';
+
+/// A [PromptedInterviewBrain] over an AI connection that takes text and
+/// returns text (Vidya's Ask AI, a local Ollama server): the schema goes in
+/// the prompt ([textInstructions]) and the JSON is read back out of the
+/// reply ([replyJson]). Everything after that is the same as for any other
+/// model: the same parsing, the same quote checks.
+abstract class TextPromptedInterviewBrain extends PromptedInterviewBrain {
+  const TextPromptedInterviewBrain();
+
+  /// Sends [system] and [text] to the model and returns its reply.
+  Future<String> send(String system, String text);
+
+  @override
+  Future<Json> ask(BrainRequest request) async =>
+      replyJson(await send(textInstructions(request), request.texts.join('\n\n')));
+}
+
+/// Improves the candidate's own [answer] through [brain], held to honesty
+/// rule 7: nothing is asked of the AI until the candidate has made an
+/// attempt of their own ([hasOwnAttempt]), and the rewrite is refused when
+/// it adds any number, name or achievement that is not in the answer or
+/// the [storyBank] ([checkRewrite]).
+Future<RewriteCheck> improveAnswer({
+  required InterviewBrain brain,
+  required String question,
+  required String answer,
+  String criterion = '',
+  String fix = '',
+  List<String> storyBank = const [],
+}) async {
+  if (!hasOwnAttempt(answer)) return const RewriteCheck(text: '', refused: true, message: noAttemptNote);
+  final own = withoutSelfVerdicts(candidateWords(answer));
+  final rewrite = await brain.rewriteAnswer(
+    question: question,
+    criterion: criterion,
+    fix: fix,
+    answer: own,
+    storyBank: storyBank,
+  );
+  return checkRewrite(rewrite, answer: own, storyBank: storyBank);
+}
+
+/// [predicted] reworded by [brain] where the rewording adds nothing: a
+/// rewording with a number, name or achievement word that is not in the
+/// question, its reason or its card's words keeps the original wording.
+/// The tier, reason, criterion and card never change. If the AI fails, the
+/// questions come back as they were.
+Future<List<PredictedQuestion>> wordPredictedQuestions({
+  required InterviewBrain brain,
+  required String role,
+  required List<PredictedQuestion> predicted,
+}) async {
+  List<String> worded;
+  try {
+    worded = await brain.wordQuestions(role: role, questions: [for (final p in predicted) p.question]);
+  } on Object {
+    return predicted;
+  }
+  return [
+    for (final (i, p) in predicted.indexed)
+      if (i < worded.length &&
+          worded[i].trim().isNotEmpty &&
+          inventedTokens(worded[i], answer: '${p.question}\n${p.why}\n$role').isEmpty)
+        p.withWording(worded[i].trim())
+      else
+        p,
+  ];
 }
 
 String _attr(String s) => s.replaceAll('"', "'");
@@ -217,7 +360,7 @@ For each answer, score each criterion it tests (its "tests" ids) on the scale:
 - level: a code from the scale. "${scale.noEvidence.code}" when the answer has no evidence for it, or only a bare claim.
 - quote: the candidate's exact words (one sentence or part of one, copied character for character) that the level rests on; "" for "${scale.noEvidence.code}".
 A claim without an example is "${scale.noEvidence.code}": "I am a good team player", "I always…" or "I would…" with no real instance of something the candidate did.
-Then one strength of the answer and one fix: a concrete thing to do differently in the answer next time.
+Then exactly one strength of the answer, with strengthQuote: the candidate's exact words that earned it (copied character for character; a strength you cannot quote is not a strength), and exactly one fix: one concrete thing to do differently in the answer next time, in one sentence.
 The strength and the fix never mention scores, levels, the scale or its numbers (not "move toward a 3", not "to score higher"). Say what to do, for example "Say how you knew it worked: a number, a check or feedback."''',
     ],
     schema: scoringSchema(scale, [for (final c in criteria) c.id]),
@@ -225,3 +368,47 @@ The strength and the fix never mention scores, levels, the scale or its numbers 
     maxTokens: 12000,
   );
 }
+
+/// The request [PromptedInterviewBrain.rewriteAnswer] sends: the question,
+/// what it tests, the fix, the candidate's own words and story bank. No
+/// profile.
+BrainRequest rewriteRequest({
+  required String question,
+  required String criterion,
+  required String fix,
+  required String answer,
+  List<String> storyBank = const [],
+}) => BrainRequest(
+  system:
+      'You help a candidate improve their own interview answer. You keep their story and their facts: every '
+      'event, number, name, place, date, result and achievement must already be in their answer or their story '
+      'bank. Never add a number, a name, a result or an achievement they did not give, not even as an example. '
+      'Where something is missing, write [add: what is missing] for them to fill in. Plain UK English, first '
+      'person, spoken length (under 250 words).',
+  texts: [
+    '<question>$question</question>\n<tests>${criterion.isEmpty ? 'not stated' : criterion}</tests>\n'
+        '<fix>${fix.isEmpty ? 'none given' : fix}</fix>',
+    '<answer>\n$answer\n</answer>',
+    '<story_bank>\n${storyBank.isEmpty ? '(empty)' : storyBank.map((s) => '<story>$s</story>').join('\n')}\n</story_bank>',
+    'Rewrite the answer so it is clearer and applies the fix, using only what is above. answer: the rewrite.',
+  ],
+  schema: object({'answer': string('The rewritten answer, using only the candidate\'s own facts')}),
+  effort: 'low',
+  maxTokens: 2000,
+);
+
+/// The request [PromptedInterviewBrain.wordQuestions] sends: only the
+/// questions and the role.
+BrainRequest wordingRequest({required String role, required List<String> questions}) => BrainRequest(
+  system:
+      'You word interview questions the way a UK panel asks them: open, neutral, one question at a time. Keep '
+      'each question\'s meaning. Never add a fact, a number, a name, a value or a plan that the question does '
+      'not already hold.',
+  texts: [
+    '<role>${_attr(role)}</role>\n${[for (final (i, q) in questions.indexed) '<q n="${i + 1}">$q</q>'].join('\n')}',
+    'questions: each question reworded, in the same order, the same count.',
+  ],
+  schema: object({'questions': array(string())}),
+  effort: 'low',
+  maxTokens: 3000,
+);
