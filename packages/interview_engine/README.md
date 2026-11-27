@@ -31,6 +31,41 @@ The offline mock-interview engine shared by Udyoga and Vidya. See the [repo READ
 - `improveAnswer` refuses to rewrite before the candidate's own attempt, and refuses a rewrite that
   adds a number, name or achievement not in their words or story bank (`checkRewrite`).
 
+## Interviewer personas
+
+`RoundSettings.persona` (and `InterviewStage.persona` in a process template) picks the panel's
+manner. It is saved by name; an unknown name reads as `neutral`.
+
+| Persona (`PersonaKind`, saved as) | What it does | Follow-ups a question may get |
+| --- | --- | --- |
+| Friendly (`"friendly"`) | Warm thanks after each answer, short gaps | Up to 2 |
+| Neutral (`"neutral"`) | A plain "thank you"; the usual panel | Up to 2 |
+| Probing (`"probing"`) | Asks the follow-ups more often | Up to 2 |
+| Quiet (`"quiet"`) | No reaction, long gaps | Up to 2 |
+| Challenging (`"challenging"`) | Firm but professional, like a tough NHS panel or an HR investigation meeting | Up to 3 |
+
+The ladder level (1 to 5) still sets the base number of follow-ups and the clock; level 1 never
+probes.
+
+The challenging panel:
+
+- Quotes your own words back and tests them: `You said "we sorted it". What did you personally
+  do?`, "So are you saying…?", "Wouldn't it have been better to…?", "What evidence shows that
+  worked?" (`quotedChallenge`, `builtInChallengeProbes`).
+- Presses once on a reply that stayed vague (the third follow-up), then moves on.
+- At levels 4 and 5 it stops a long answer on the same clock as the other panels, politely:
+  "Let me stop you there. In one sentence: what did you personally do?"
+- Tone limits, checked on the device for every line, whoever wrote it (`groundedChallenge`):
+  - never rude, sarcastic, personal or discriminatory (`professionalTone`, `challengeBannedWords`);
+  - never accuses you of lying;
+  - quotes only words you said (`quotesOnlyHeard`, three words or more, as in rule 2);
+  - states no fact about you; its generic lines carry no number, name or achievement.
+- Composure is never a score. `QuestionState.deliveries` gives the delivery ranges of the answer
+  and each follow-up reply, as the other panels do.
+- The AI planning prompt gets the same limits: `planRequest(persona:)` and
+  `PromptedInterviewBrain.planRound(persona:)` add `personaGuidance`. The `InterviewBrain`
+  interface is unchanged.
+
 ## Video takes
 
 Rule 4 used to say video frames are never stored. It now reads: **video frames are not stored,
@@ -118,6 +153,13 @@ was found in the audit and closed then.
 | 10. "Not found in your sources" | `noSourcesNote`, `notInSourcesNote`, `organisationTierNote`; empty expectation groups say so | `rule10_not_found` | J6 (Vidya's dossier search before J6) |
 | 11. The panel's real scale, with this level's and the next level's anchor | `InterviewProcess.framework` per template (`frameworkForProcess`); `Debrief.scoreLines` gives `next` | `rule11_real_scales` | J6 (scales before J6) |
 | 12. Same rules on local and cloud models | One prompt and schema for every brain (`PromptedInterviewBrain`, `TextPromptedInterviewBrain`, `replyJson`); every reply goes through the same checks | `rule12_same_rules_everywhere` | J6 |
+
+The group "the challenging panel keeps the twelve rules" in the same file tests the challenging
+persona against them: `rule01_criteria_fixed (challenging)` (it probes only the agreed elements),
+`rule02_quote_checked (challenging)` (every quote is a span of the transcript), `rule03_cards_are_sourced
+(challenging)` (no card or outside claim in a challenge), `rule07_no_model_answer_first (challenging)` (no
+invented number, name or achievement), `rule12_same_rules_everywhere (challenging)` (AI-written probes
+get the same checks; one prompt for every model), plus the tone list and the three-follow-up cap.
 
 The same file has sycophancy probes (praise appended to an answer, "I think that deserves a 4",
 flattering self-description), the rewrite-invention check, and question ranking with and without

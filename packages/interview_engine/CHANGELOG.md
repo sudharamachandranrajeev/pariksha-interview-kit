@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.5.0 (unreleased)
+
+A2: the challenging interviewer persona.
+
+- `PersonaKind.challenging` (saved as `"challenging"`; unknown names still read as `neutral`): firm
+  but professional, like a tough NHS panel or an HR investigation meeting.
+- Follow-ups quote the candidate's own words and test the premise (`quotedChallenge`,
+  `builtInChallengeProbes`): "So are you saying…?", "Wouldn't it have been better to…?", "What
+  evidence shows that worked?".
+- Up to three follow-ups for this panel (`maxChallengeProbes`, `Persona.maxProbes`): the third
+  presses once on a reply that stayed vague. Other panels keep two.
+- `ProbePicker.next(challenge:)`; every line is checked by `groundedChallenge`: no word from
+  `challengeBannedWords` (`professionalTone`), and every quote is in the transcript
+  (`quotesOnlyHeard`).
+- At levels 4 and 5 the panel interrupts on the same clock with its own polite line
+  (`Persona.interruption`, `challengeInterruptLine`, `challengeWrapUpQuestion`).
+- `QuestionState.deliveries`: delivery ranges of the answer and each reply, never a score.
+- `planRequest(persona:)`, `PromptedInterviewBrain.planRound(persona:)` and `personaGuidance` add
+  the tone limits to the AI planning prompt. The `InterviewBrain` interface is unchanged.
+- The voice cache keeps the panel's fixed lines, never a line that quotes the candidate.
+- Tests: rule-table tests for the challenging panel (rules 1, 2, 3, 7, 12), tone, the cap,
+  interruption, settings round-trip.
+
 ## 0.4.0 (unreleased)
 
 J7: video takes, opt-in per session. Rule 4 now reads "video frames are not stored, unless the user
