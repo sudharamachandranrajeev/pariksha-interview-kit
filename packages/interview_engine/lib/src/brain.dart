@@ -120,8 +120,9 @@ abstract class PromptedInterviewBrain implements InterviewBrain {
   Future<List<QuestionPlan>> planRound({
     required String role,
     required List<EngineQuestion> questions,
+    PersonaKind persona = PersonaKind.neutral,
   }) async {
-    final data = await ask(planRequest(role: role, questions: questions));
+    final data = await ask(planRequest(role: role, questions: questions, persona: persona));
     return [for (final q in objs(data['questions'])) QuestionPlan.fromJson(q)];
   }
 
@@ -272,12 +273,38 @@ Future<List<PredictedQuestion>> wordPredictedQuestions({
 
 String _attr(String s) => s.replaceAll('"', "'");
 
-/// The request [PromptedInterviewBrain.planRound] sends.
-BrainRequest planRequest({required String role, required List<EngineQuestion> questions}) => BrainRequest(
-  system:
-      'You plan structured interview questions the way a trained UK panel does: each question tests one '
-      'pre-agreed criterion, and follow-up probes are chosen by what an answer leaves out. Use plain UK '
-      'English. Probes are short, neutral and open; never leading, never two questions in one.',
+/// How the probes are worded for [persona], added to the planning prompt.
+/// Empty for every panel but the challenging one. The on-device picker
+/// checks every line again ([groundedChallenge]) before it is asked.
+String personaGuidance(PersonaKind persona) => switch (persona) {
+  PersonaKind.challenging =>
+    'This panel is firm but professional, like a tough NHS interview panel or an HR investigation '
+        'meeting. Its probes challenge claims, ask for specific evidence and test the premise, for example '
+        '"So are you saying it was a team effort?", "Wouldn\'t it have been better to escalate sooner?", '
+        '"What evidence shows that worked?". Limits: never rude, sarcastic, personal or discriminatory; never '
+        'mention age, health, family, faith, origin, accent or any personal trait; never accuse the candidate '
+        'of lying; never state or assume a fact about the candidate; quote nothing, because the probes are '
+        'written before the answer is heard. Still one question per probe, about the gap only.',
+  _ => '',
+};
+
+/// The request [PromptedInterviewBrain.planRound] sends. With the
+/// challenging [persona] the probes may lead and test the premise, within
+/// the tone limits of [personaGuidance]; otherwise they are neutral.
+BrainRequest planRequest({
+  required String role,
+  required List<EngineQuestion> questions,
+  PersonaKind persona = PersonaKind.neutral,
+}) => BrainRequest(
+  system: [
+    'You plan structured interview questions the way a trained UK panel does: each question tests one '
+        'pre-agreed criterion, and follow-up probes are chosen by what an answer leaves out. Use plain UK '
+        'English.',
+    if (persona == PersonaKind.challenging)
+      'Probes are short and firm; never two questions in one. ${personaGuidance(persona)}'
+    else
+      'Probes are short, neutral and open; never leading, never two questions in one.',
+  ].join(' '),
   texts: [
     '<round role="${_attr(role)}">\n'
         '${[for (final (i, q) in questions.indexed) '<question n="${i + 1}" kind="${_attr(q.category)}">${q.question}</question>'].join('\n')}\n'

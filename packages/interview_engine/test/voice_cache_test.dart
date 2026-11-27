@@ -21,6 +21,9 @@ void main() {
       mayInterruptScript,
       interruptLine,
       builtInProbes[AnswerElement.measure]!.first,
+      builtInChallengeProbes[AnswerElement.measure]!.first,
+      challengeInterruptLine,
+      Persona.of(PersonaKind.challenging).greeting,
       Persona.of(PersonaKind.friendly).acknowledgements.first,
       nhsStyle.stages[0].settler.question,
     ]) {
@@ -34,6 +37,9 @@ void main() {
       'Could you start by telling me a little about your current role at Example Clinic?',
       'I rang the hospital and booked a new date.',
       '${neutral.greeting} extra',
+      // A challenge quoting the candidate's words is never cached.
+      'You said "We had a backlog last winter".',
+      quotedChallenge(AnswerElement.ownAction, 'We had a backlog last winter. We cleared it.')!.text,
     ]) {
       expect(cache.keyFor(text), isNull, reason: text);
     }

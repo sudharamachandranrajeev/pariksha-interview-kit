@@ -16,6 +16,7 @@ import 'dart:math' as math;
 
 import '../question.dart';
 import '../json.dart';
+import 'interview_scoring.dart' show quoteInTranscript;
 
 /// The parts of a full answer that panels listen for.
 enum AnswerElement {
@@ -535,21 +536,175 @@ List<AnswerElement> missingElements(QuestionPlan plan, String transcript) {
 /// Panels ask one or two follow-ups at most.
 const maxProbesPerQuestion = 2;
 
+/// The challenging panel may ask a third: it presses once on an answer
+/// that stayed vague after its follow-up, the way a tough panel or an HR
+/// investigation meeting does, without dropping the other gaps.
+const maxChallengeProbes = 3;
+
+// ---- the challenging panel's wording ----
+
+/// Firm, professional follow-ups with no AI and no quote: leading and
+/// premise-testing ("So are you saying…?", "Wouldn't it have been
+/// better to…?", "What evidence shows that worked?"). Generic on purpose:
+/// they state nothing about the candidate.
+const builtInChallengeProbes = {
+  AnswerElement.ownAction: [
+    'Let me be clear: what did you personally do, not the team?',
+    'So are you saying it was a team effort? Which part was yours alone?',
+  ],
+  AnswerElement.situation: [
+    'Be specific, please: one time it happened, when and where?',
+    'So are you saying this happens often? Take one occasion: when was it?',
+  ],
+  AnswerElement.result: [
+    'So what actually changed as a result?',
+    'Are you saying it worked? What was the outcome, exactly?',
+  ],
+  AnswerElement.measure: [
+    'What evidence shows that worked?',
+    'How do you know it was your action that made the difference?',
+  ],
+  AnswerElement.learning: [
+    "Looking back, wouldn't it have been better to do something differently?",
+    'What would you do differently next time, and why?',
+  ],
+  AnswerElement.others: [
+    'Did you do that alone? Who else was involved?',
+    'How did you get the others to agree with you?',
+  ],
+};
+
+/// Words the challenging panel never uses: insults, sarcasm, accusations
+/// and personal or protected topics (age, accent, family, health, faith,
+/// origin and the like). A follow-up with any of them is never asked,
+/// whoever wrote it. Firm is fine; rude, sarcastic, personal or
+/// discriminatory is not.
+const challengeBannedWords = {
+  // insults and contempt
+  'stupid', 'idiot', 'idiotic', 'ridiculous', 'pathetic', 'useless', 'lazy', 'incompetent', 'clueless',
+  'nonsense', 'rubbish', 'waffle', 'waffling', 'rambling', 'pointless', 'terrible', 'awful', 'hopeless',
+  'weak', 'embarrassing', 'laughable', 'dumb', 'shut',
+  // sarcasm and scorn
+  'seriously', 'obviously', 'really?', 'sure you did', 'yeah right', 'come on', 'give me a break',
+  'nice try', 'oh please',
+  // accusations
+  'liar', 'lie', 'lying', 'lied', 'dishonest', 'made up', 'making that up', 'fake',
+  // personal and protected topics
+  'age', 'old', 'young', 'accent', 'gender', 'race', 'religion', 'faith', 'pregnant', 'pregnancy',
+  'disability', 'disabled', 'married', 'children', 'kids', 'nationality', 'ethnic', 'ethnicity',
+  'sexuality', 'gay', 'health condition', 'where are you really from',
+};
+
+final _quoted = RegExp(r'["“]([^"”]+)["”]');
+
+/// True when [line] keeps the challenging panel's tone: none of
+/// [challengeBannedWords], matched as whole words, ignoring case.
+bool professionalTone(String line) {
+  final t = ' ${line.toLowerCase().replaceAll(RegExp(r"[’‘]"), "'").replaceAll(RegExp(r'[^a-z?\s]'), ' ')} '
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .replaceAll('?', ' ? ');
+  for (final w in challengeBannedWords) {
+    final word = w.replaceAll('?', ' ?');
+    if (RegExp('(^|\\s)${RegExp.escape(word)}(?=\\s|\$)').hasMatch(t)) return false;
+  }
+  return true;
+}
+
+/// True when every quoted span in [line] is in [heard], word for word
+/// ([quoteInTranscript]: three words or more). A line with no quote passes.
+/// The challenging panel may only quote what the candidate said.
+bool quotesOnlyHeard(String line, String heard) =>
+    _quoted.allMatches(line).every((m) => quoteInTranscript(m[1]!, heard));
+
+/// True when the challenging panel may say [line] after [heard]: the tone
+/// holds and every quote is the candidate's own words.
+bool groundedChallenge(String line, String heard) => professionalTone(line) && quotesOnlyHeard(line, heard);
+
+/// Sentences of what the candidate said, in order, as spoken.
+List<String> _sentences(String heard) => [
+  for (final s in heard.split(RegExp(r'(?<=[.!?])\s+|\n+')))
+    if (s.trim().isNotEmpty) s.trim().replaceAll(RegExp(r'[.!?,;:]+$'), ''),
+];
+
+/// At most [max] words of [sentence], from its start.
+String _span(String sentence, {int max = 12}) {
+  final w = sentence.split(RegExp(r'\s+'));
+  return w.length <= max ? sentence : w.take(max).join(' ');
+}
+
+final _teamWords = RegExp(r"\b(we|we'd|we've|us|our|the team|they)\b", caseSensitive: false);
+final _claimWords = RegExp(
+  r'\b(went well|worked|improved|better|success\w*|sorted|resolved|fixed|solved|happy|positive|great|reduced|increased)\b',
+  caseSensitive: false,
+);
+final _generalWords = RegExp(
+  r'\b(usually|always|normally|often|generally|tend to|typically|would)\b',
+  caseSensitive: false,
+);
+final _ownWords = RegExp(r'\bi\b', caseSensitive: false);
+
+/// A challenge to the gap at [e] that quotes the candidate's own words, or
+/// null when no sentence of [heard] fits. Only a span of [heard] is ever
+/// quoted, and the line is checked with [groundedChallenge] before it is
+/// returned, so it cannot carry an invented quote or claim.
+Probe? quotedChallenge(AnswerElement e, String heard) {
+  // Short clauses read best as a quote; a whole sentence (cut to twelve
+  // words) is the fallback.
+  final sentences = _sentences(heard);
+  final clauses = [
+    for (final s in sentences)
+      for (final c in s.split(RegExp(r'\s*[,;]\s*')))
+        if (c.split(RegExp(r'\s+')).length case final n when n >= 3 && n <= 14) c,
+  ];
+  String? pick(RegExp re) => [...clauses, ...sentences].where(re.hasMatch).firstOrNull;
+  final (sentence, template) = switch (e) {
+    AnswerElement.ownAction => (pick(_teamWords), 'You said "%s". What did you personally do?'),
+    AnswerElement.measure => (pick(_claimWords), 'You said "%s". What evidence shows that worked?'),
+    AnswerElement.result => (
+      pick(_claimWords),
+      'You said "%s". So are you saying that was the outcome? What actually changed?',
+    ),
+    AnswerElement.situation => (
+      pick(_generalWords),
+      'You said "%s". That sounds general. Can you give us one specific time?',
+    ),
+    AnswerElement.learning => (
+      pick(_ownWords),
+      'You said "%s". Looking back, wouldn\'t it have been better to do something differently?',
+    ),
+    AnswerElement.others => (pick(_ownWords), 'You said "%s". Did you do that alone? Who else was involved?'),
+  };
+  if (sentence == null) return null;
+  final quote = _span(sentence);
+  final line = template.replaceFirst('%s', quote);
+  return groundedChallenge(line, heard) ? Probe(e, line) : null;
+}
+
 abstract final class ProbePicker {
   /// The next probe for an answer that so far says [heard] (the answer and
   /// any follow-up answers), or null when nothing is missing, [asked]
-  /// already holds [limit] probes (never more than two), or every missing
-  /// element has been probed. Elements in [focus] (missed at an earlier
-  /// stage) come first. An element is never probed twice and no wording is
-  /// repeated.
+  /// already holds [limit] probes (never more than two, or three when
+  /// [challenge]), or every missing element has been probed. Elements in
+  /// [focus] (missed at an earlier stage) come first. No wording is
+  /// repeated, and an element is never probed twice, except that the
+  /// challenging panel ([challenge]) may press once on the element it just
+  /// asked about when the reply still left it out.
+  ///
+  /// With [challenge] the wording is the challenging panel's: a quote of
+  /// the candidate's own words first ([quotedChallenge]), then the plan's
+  /// probes, then [builtInChallengeProbes], then [builtInProbes]. Every
+  /// line must pass [groundedChallenge]: one with a banned word or a quote
+  /// the candidate did not say is never asked.
   static Probe? next({
     required QuestionPlan plan,
     required String heard,
     required List<Probe> asked,
     int limit = maxProbesPerQuestion,
     List<AnswerElement> focus = const [],
+    bool challenge = false,
   }) {
-    if (asked.length >= math.min(limit, maxProbesPerQuestion)) return null;
+    final cap = challenge ? maxChallengeProbes : maxProbesPerQuestion;
+    if (asked.length >= math.min(limit, cap)) return null;
     final missing = missingElements(plan, heard);
     if (missing.isEmpty) return null;
     final order = [
@@ -558,18 +713,34 @@ abstract final class ProbePicker {
       for (final e in missing)
         if (!focus.contains(e)) e,
     ];
-    final askedElements = {for (final p in asked) p.element};
     final askedTexts = {for (final p in asked) p.text.toLowerCase()};
-    for (final e in order) {
-      if (askedElements.contains(e)) continue;
+    Probe? wordFor(AnswerElement e) {
       final wordings = [
+        if (challenge) ?quotedChallenge(e, heard)?.text,
         for (final p in plan.probes)
           if (p.element == e) p.text,
+        if (challenge) ...?builtInChallengeProbes[e],
         ...?builtInProbes[e],
       ];
       for (final w in wordings) {
-        if (!askedTexts.contains(w.toLowerCase())) return Probe(e, w);
+        if (askedTexts.contains(w.toLowerCase())) continue;
+        if (challenge && !groundedChallenge(w, heard)) continue;
+        return Probe(e, w);
       }
+      return null;
+    }
+
+    // The challenging panel presses at once on a reply that stayed vague.
+    if (challenge && asked.isNotEmpty) {
+      final last = asked.last.element;
+      if (missing.contains(last) && asked.where((p) => p.element == last).length == 1) {
+        if (wordFor(last) case final p?) return p;
+      }
+    }
+    final askedElements = {for (final p in asked) p.element};
+    for (final e in order) {
+      if (askedElements.contains(e)) continue;
+      if (wordFor(e) case final p?) return p;
     }
     return null;
   }
@@ -577,7 +748,9 @@ abstract final class ProbePicker {
 
 // ---- the panel's manner ----
 
-enum PersonaKind { friendly, neutral, probing, quiet }
+/// The panel's manner. Saved by name ("challenging"); an unknown name
+/// reads as [neutral].
+enum PersonaKind { friendly, neutral, probing, quiet, challenging }
 
 /// How the interviewer behaves: what they say after an answer, how long
 /// they leave before speaking, and how hard they probe.
@@ -593,6 +766,10 @@ class Persona {
     this.probeLead = '',
     this.extraProbe = false,
     this.silenceNote = '',
+    this.maxProbes = maxProbesPerQuestion,
+    this.challenges = false,
+    this.interruption = interruptLine,
+    this.wrapUpAsk = wrapUpQuestion,
   });
 
   final PersonaKind kind;
@@ -615,11 +792,27 @@ class Persona {
   final String probeLead;
 
   /// Probes once more than the ladder level alone would (still at most
-  /// two a question).
+  /// [maxProbes] a question).
   final bool extraProbe;
 
   /// Shown before the round when the panel will be quiet (plan rule 7).
   final String silenceNote;
+
+  /// The most follow-ups a question gets from this panel: two, or
+  /// [maxChallengeProbes] for the challenging panel.
+  final int maxProbes;
+
+  /// Words its follow-ups as challenges ([ProbePicker.next] `challenge`):
+  /// quotes the candidate's own words, tests the premise, and presses once
+  /// on a reply that stayed vague. Never rude, sarcastic, personal or
+  /// discriminatory ([groundedChallenge]).
+  final bool challenges;
+
+  /// Said when the panel stops an answer at ladder levels 4 and 5.
+  final String interruption;
+
+  /// The wrap-up question as shown after [interruption].
+  final String wrapUpAsk;
 
   /// The line after question [index] is finished, or '' for none.
   String acknowledgement(int index) =>
@@ -674,6 +867,23 @@ const personas = {
     silenceNote:
         'This panel stays quiet: no nods, no "thank you", and long gaps. Panels are trained not to react, so '
         'silence does not mean the answer went badly. Finish with a one-line wrap-up, then stop and wait.',
+  ),
+  PersonaKind.challenging: Persona(
+    kind: PersonaKind.challenging,
+    label: 'Challenging',
+    about:
+        'Firm but professional, like a tough panel or an HR investigation meeting: tests your claims, asks '
+        'for evidence and presses on vague answers. Never rude or personal.',
+    greeting: 'Thank you for coming. We will test your answers closely and may challenge what you say.',
+    acknowledgements: ['Thank you.', 'Noted. Moving on.'],
+    gapAfterAnswer: Duration(milliseconds: 1500),
+    gapBeforeProbe: Duration(milliseconds: 800),
+    probeLead: 'Let me press you on that. ',
+    extraProbe: true,
+    maxProbes: maxChallengeProbes,
+    challenges: true,
+    interruption: challengeInterruptLine,
+    wrapUpAsk: challengeWrapUpQuestion,
   ),
 };
 
@@ -735,6 +945,16 @@ const ladder = [
 /// The polite interruption at levels 4 and 5.
 const interruptLine =
     'Thank you. I am going to stop you there so we keep to time. Could you sum that up in one sentence?';
+
+/// The wrap-up question as shown after [interruptLine].
+const wrapUpQuestion = 'Could you sum that up in one sentence?';
+
+/// The challenging panel's interruption at levels 4 and 5: polite, and
+/// aimed at the candidate's own part.
+const challengeInterruptLine = 'Let me stop you there. In one sentence: what did you personally do?';
+
+/// The wrap-up question as shown after [challengeInterruptLine].
+const challengeWrapUpQuestion = 'In one sentence: what did you personally do?';
 
 /// Said at the start of a stage: the panel may interrupt (plan I2).
 const mayInterruptScript =

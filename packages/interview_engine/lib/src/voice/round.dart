@@ -5,7 +5,7 @@
 ///
 /// With an [Interviewer] (plan I2) the round behaves like a panel: after
 /// each answer it picks a follow-up from what the answer is missing (at most
-/// two), says its persona's acknowledgement after the persona's gap, and at
+/// two, three for the challenging panel), says its persona's acknowledgement after the persona's gap, and at
 /// the top of the ladder stops an answer that runs over time and asks for a
 /// one-sentence wrap-up.
 ///
@@ -180,6 +180,11 @@ class QuestionState {
 
   List<Probe> get probes => [for (final f in followUps) ?f.probe];
 
+  /// How the delivery held up: the latest take's measures, then each
+  /// follow-up's, in order. Ranges only, never a score (plan rule 5); a
+  /// challenging panel's composure is read from these.
+  List<DeliveryMetrics> get deliveries => [?latest?.delivery, for (final f in followUps) ?f.take.delivery];
+
   /// Everything said for this question: the take and its follow-ups.
   String get heard =>
       [latest?.transcript ?? '', for (final f in followUps) f.take.transcript].join(' ').trim();
@@ -222,7 +227,7 @@ class Interviewer {
 
   /// Follow-ups each question may get.
   int get probeLimit =>
-      level.probes == 0 ? 0 : math.min(maxProbesPerQuestion, level.probes + (persona.extraProbe ? 1 : 0));
+      level.probes == 0 ? 0 : math.min(persona.maxProbes, level.probes + (persona.extraProbe ? 1 : 0));
 
   QuestionPlan? plan(int i) => i < plans.length ? plans[i] : null;
   Duration? budget(int i) => i < budgets.length ? budgets[i] : null;
@@ -236,7 +241,14 @@ class Interviewer {
   Probe? nextProbe(int i, QuestionState s) {
     final p = plan(i);
     if (p == null) return null;
-    return ProbePicker.next(plan: p, heard: s.heard, asked: s.probes, limit: probeLimit, focus: focus);
+    return ProbePicker.next(
+      plan: p,
+      heard: s.heard,
+      asked: s.probes,
+      limit: probeLimit,
+      focus: focus,
+      challenge: persona.challenges,
+    );
   }
 }
 
@@ -511,8 +523,8 @@ class SpokenRound {
       if (!s.followUps.any((f) => f.kind == FollowUpKind.wrapUp)) {
         return _ask(
           _Answering.wrapUp,
-          interruptLine,
-          'Could you sum that up in one sentence?',
+          iv.persona.interruption,
+          iv.persona.wrapUpAsk,
           null,
           Duration.zero,
           turn,

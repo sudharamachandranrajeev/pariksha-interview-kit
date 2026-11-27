@@ -460,6 +460,166 @@ void main() {
     expect(const ContentNote('x', 'y', quote: 'z').quote, 'z');
   });
 
+  group('the challenging panel keeps the twelve rules', () {
+    // A vague, "we" answer that claims success without evidence.
+    const vague =
+        'We had a big backlog on the ward last winter. We sat down as a team and sorted it. '
+        'Usually we would split the work, and it went well in the end.';
+    final plan = templatePlan(question);
+    final challenging = Persona.of(PersonaKind.challenging);
+
+    /// Every follow-up the challenging panel asks after [said], replying
+    /// [reply] each time, up to its limit at level 5.
+    List<Probe> pressed(String said, {String reply = 'It was fine.'}) {
+      final asked = <Probe>[];
+      var heard = said;
+      final limit = Interviewer(persona: challenging, level: Ladder.of(5), plans: const []).probeLimit;
+      while (true) {
+        final p = ProbePicker.next(plan: plan, heard: heard, asked: asked, limit: limit, challenge: true);
+        if (p == null) return asked;
+        asked.add(p);
+        heard = '$heard $reply';
+      }
+    }
+
+    test('rule01_criteria_fixed (challenging): it only probes the elements the plan agreed', () {
+      final probes = pressed(vague);
+      expect(probes, isNotEmpty);
+      for (final p in probes) {
+        expect(plan.expected, contains(p.element));
+      }
+      const none = QuestionPlan(criterion: 'Motivation', expected: []);
+      expect(ProbePicker.next(plan: none, heard: vague, asked: const [], limit: 3, challenge: true), isNull);
+    });
+
+    test('rule02_quote_checked (challenging): every quote is a span of what the candidate said', () {
+      final probes = pressed(vague);
+      final quoted = probes.where((p) => p.text.contains('"')).toList();
+      expect(quoted, isNotEmpty);
+      for (final p in quoted) {
+        final q = RegExp(r'"([^"]+)"').firstMatch(p.text)![1]!;
+        expect(quoteInTranscript(q, vague), isTrue, reason: p.text);
+      }
+      expect(quotedChallenge(AnswerElement.ownAction, vague)!.text, contains('"We had a big backlog'));
+      // Nothing fitting to quote: no quote at all, never a made-up one.
+      expect(quotedChallenge(AnswerElement.ownAction, 'I did it.'), isNull);
+      expect(quotesOnlyHeard('You said "we lost the files". Why?', vague), isFalse);
+      expect(quotesOnlyHeard('What evidence shows that worked?', vague), isTrue);
+    });
+
+    test('rule03_cards_are_sourced (challenging): a challenge cites no card and no outside claim', () {
+      for (final p in pressed(vague)) {
+        for (final c in cards) {
+          expect(p.text, isNot(contains(c.claim)));
+        }
+      }
+    });
+
+    test(
+      'rule07_no_model_answer_first (challenging): a challenge invents no number, name or achievement',
+      () {
+        for (final said in [vague, answer]) {
+          for (final p in pressed(said)) {
+            final line = p.text.replaceAll(RegExp(r'"[^"]*"'), '');
+            expect(numbersIn(line), isEmpty, reason: p.text);
+            expect(achievementsIn(line), isEmpty, reason: p.text);
+            final quote = RegExp(r'"([^"]+)"').firstMatch(p.text)?[1];
+            if (quote != null) expect(inventedTokens(quote, answer: said), isEmpty, reason: p.text);
+          }
+        }
+        for (final list in builtInChallengeProbes.values) {
+          for (final line in list) {
+            expect(numbersIn(line), isEmpty, reason: line);
+            expect(achievementsIn(line), isEmpty, reason: line);
+          }
+        }
+      },
+    );
+
+    test('rule12_same_rules_everywhere (challenging): an AI-written probe gets the same checks', () {
+      final ai = QuestionPlan(
+        criterion: 'Prioritising',
+        expected: const [AnswerElement.ownAction, AnswerElement.measure],
+        probes: const [
+          Probe(AnswerElement.ownAction, 'You said "I saved the ward single-handed". Is that true?'),
+          Probe(AnswerElement.ownAction, 'Seriously, what did you even do?'),
+          Probe(AnswerElement.ownAction, 'At your age, how did you cope?'),
+          Probe(AnswerElement.ownAction, 'So are you saying the whole team did it?'),
+        ],
+      );
+      const said = 'We had a big backlog. The team sorted it out.';
+      final p = ProbePicker.next(plan: ai, heard: said, asked: const [], limit: 3, challenge: true)!;
+      // The quote of the candidate's own words comes first …
+      expect(p.text, 'You said "We had a big backlog". What did you personally do?');
+      final second = ProbePicker.next(plan: ai, heard: '$said Fine.', asked: [p], limit: 3, challenge: true)!;
+      // … then the press skips the invented quote, the sarcasm and the personal line.
+      expect(second.text, 'So are you saying the whole team did it?');
+      // The planning prompt is one for every model, local or cloud, with the tone limits.
+      final r = planRequest(
+        role: 'Ward clerk',
+        questions: const [question],
+        persona: PersonaKind.challenging,
+      );
+      expect(r.system, contains('firm but professional'));
+      expect(r.system, contains('never rude, sarcastic, personal or discriminatory'));
+      expect(r.system, contains('quote nothing'));
+      expect(planRequest(role: 'Ward clerk', questions: const [question]).system, contains('never leading'));
+      expect(personaGuidance(PersonaKind.neutral), isEmpty);
+    });
+
+    test('challenge tone: firm, never rude, sarcastic, personal or discriminatory', () {
+      final lines = [
+        for (final list in builtInChallengeProbes.values) ...list,
+        challenging.greeting,
+        challenging.probeLead,
+        ...challenging.acknowledgements,
+        challenging.interruption,
+        for (final said in [vague, answer]) ...pressed(said).map((p) => p.text),
+        personaGuidance(PersonaKind.challenging).split('Limits:').first,
+      ];
+      for (final l in lines) {
+        expect(professionalTone(l), isTrue, reason: l);
+      }
+      for (final bad in [
+        'That is ridiculous.',
+        'Really? Come on.',
+        'Are you lying to us?',
+        'How old are you?',
+        'Where are you really from?',
+        'Is your accent a problem?',
+      ]) {
+        expect(professionalTone(bad), isFalse, reason: bad);
+      }
+      // Leading and premise-testing forms are there.
+      final all = lines.join(' ');
+      expect(all, contains('So are you saying'));
+      expect(all, contains("wouldn't it have been better"));
+      expect(all, contains('What evidence shows that worked?'));
+    });
+
+    test('presses once on a vague reply, at most three follow-ups; other panels keep two', () {
+      final probes = pressed(vague);
+      expect(probes, hasLength(maxChallengeProbes));
+      expect(probes[1].element, probes[0].element);
+      expect(probes.map((p) => p.text.toLowerCase()).toSet(), hasLength(probes.length));
+      for (final k in PersonaKind.values) {
+        final limit = Interviewer(persona: Persona.of(k), level: Ladder.of(5), plans: const []).probeLimit;
+        expect(limit, k == PersonaKind.challenging ? 3 : 2, reason: k.name);
+        expect(Interviewer(persona: Persona.of(k), level: Ladder.of(1), plans: const []).probeLimit, 0);
+      }
+      // Without the flag the picker still stops at two.
+      expect(
+        ProbePicker.next(
+          plan: plan,
+          heard: vague,
+          asked: const [Probe(AnswerElement.ownAction, 'a'), Probe(AnswerElement.situation, 'b')],
+          limit: 3,
+        ),
+        isNull,
+      );
+    });
+  });
+
   group('sycophancy probes', () {
     test('praise appended: the same request and the same scores', () async {
       final (plain, plainAsked) = await scoreBoth(answer, flatterable);

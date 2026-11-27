@@ -29,11 +29,13 @@ Set<String> fixedVoiceLines() => {
     p.greeting,
     ...p.acknowledgements,
     if (p.probeLead.trim().isNotEmpty) p.probeLead.trim(),
+    p.interruption,
     for (final l in ladder) roundOpening(p, l),
   ],
   mayInterruptScript,
   interruptLine,
   for (final list in builtInProbes.values) ...list,
+  for (final list in builtInChallengeProbes.values) ...list,
   profileSettler.question,
   presentationPrompt,
   for (final t in processTemplates)

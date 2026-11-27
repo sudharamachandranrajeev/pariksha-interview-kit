@@ -247,6 +247,21 @@ void main() {
         [PersonaKind.quiet, 4, const Duration(seconds: 8), false],
       );
     });
+    test('"challenging" is saved by name; an unknown persona still reads as neutral', () {
+      const saved = RoundSettings(persona: PersonaKind.challenging, level: 5);
+      expect(saved.toJson()['persona'], 'challenging');
+      expect(RoundSettings.fromJson(saved.toJson()).persona, PersonaKind.challenging);
+      expect(RoundSettings.fromJson(const {'persona': 'hostile'}).persona, PersonaKind.neutral);
+      expect(RoundSettings.fromJson(const {'persona': 'Challenging'}).persona, PersonaKind.neutral);
+      final c = Persona.of(PersonaKind.challenging);
+      expect(c.label, 'Challenging');
+      expect(c.maxProbes, maxChallengeProbes);
+      expect(c.challenges, isTrue);
+      for (final k in PersonaKind.values.where((k) => k != PersonaKind.challenging)) {
+        final p = Persona.of(k);
+        expect([p.challenges, p.maxProbes, p.interruption], [false, maxProbesPerQuestion, interruptLine]);
+      }
+    });
   });
 
   group('end of an answer', () {
@@ -422,6 +437,74 @@ void main() {
       expect(round.phase, RoundPhase.review);
       expect(round.state.followUps, hasLength(1));
       expect(listener.captures, isEmpty);
+    });
+
+    test('the challenging panel quotes the answer, presses once and asks three at most', () async {
+      make([
+        spoken(weAnswer, seconds: 30),
+        spoken('It was a joint effort really.'),
+        spoken('Honestly, it went fine.'),
+        spoken('Not sure.'),
+      ], persona: PersonaKind.challenging);
+      await round.ask();
+      await round.done();
+      final c = Persona.of(PersonaKind.challenging);
+      expect(voice.said.last, startsWith('${c.probeLead}You said "'));
+      expect(round.followUpQuestion, 'You said "We had a backlog last winter". What did you personally do?');
+      await round.done();
+      // Still no own action: it presses on the same gap, in new words.
+      expect(round.state.followUps.last.probe!.element, AnswerElement.ownAction);
+      expect(round.followUpQuestion, builtInChallengeProbes[AnswerElement.ownAction]!.first);
+      await round.done();
+      expect(round.followingUp, isTrue);
+      await round.done();
+      expect(round.phase, RoundPhase.review);
+      final st = round.state;
+      expect(st.followUps, hasLength(3));
+      expect(st.probes.map((p) => p.text.toLowerCase()).toSet(), hasLength(3));
+      for (final f in st.followUps) {
+        expect(groundedChallenge(f.asked, st.heard), isTrue, reason: f.asked);
+      }
+      expect(pauses.first, c.gapBeforeProbe);
+      // Composure is the delivery ranges of each reply, never a score.
+      expect(st.deliveries, hasLength(4));
+      expect(st.deliveries.expand((d) => d.readings).map((r) => r.place), everyElement(isA<RangePlace>()));
+    });
+
+    test('at levels 4 and 5 the challenging panel stops a long answer politely, on the same clock', () async {
+      make(
+        [spoken(rotaAnswer, seconds: 120), spoken('I rang the bank staff.')],
+        persona: PersonaKind.challenging,
+        level: 5,
+      );
+      await round.ask();
+      final capture = listener.captures.single;
+      capture.statuses.add(ListenStatus(elapsed: s(100), heardSpeech: true));
+      await pumpEventQueue();
+      expect(round.phase, RoundPhase.answering);
+      capture.statuses.add(ListenStatus(elapsed: s(113), heardSpeech: true));
+      await pumpEventQueue();
+      expect(voice.said.last, challengeInterruptLine);
+      expect(professionalTone(challengeInterruptLine), isTrue);
+      expect(round.wrappingUp, isTrue);
+      expect(round.followUpQuestion, challengeWrapUpQuestion);
+      expect(round.budget, wrapUpTime);
+      await round.done();
+      expect(round.state.followUps.single.kind, FollowUpKind.wrapUp);
+      expect(round.state.fullTranscript, contains('Wrap-up: "$challengeWrapUpQuestion"'));
+
+      // Level 3 never interrupts, whatever the panel.
+      make([
+        spoken(rotaAnswer, seconds: 400),
+        spoken('x'),
+        spoken('y'),
+        spoken('z'),
+      ], persona: PersonaKind.challenging);
+      await round.ask();
+      listener.captures.single.statuses.add(ListenStatus(elapsed: s(399), heardSpeech: true));
+      await pumpEventQueue();
+      expect(round.phase, RoundPhase.answering);
+      expect(round.wrappingUp, isFalse);
     });
 
     test('a re-take starts the follow-ups again; the opening is said once', () async {
